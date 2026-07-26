@@ -1,0 +1,29 @@
+[package]
+name = "studio-wasm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+studio-core = { path = "../studio-core" }
+studio-renderer = { path = "../studio-renderer" }
+fab-control = { workspace = true }
+serde = { workspace = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+
+[dependencies.wgpu]
+version = "30"
+default-features = false
+features = ["webgl", "webgpu", "wgsl"]
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["Document", "Window", "Element", "HtmlCanvasElement"]

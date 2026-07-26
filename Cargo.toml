@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["studio-core", "studio-renderer", "studio-wasm"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/CrimsonCosmos/studio-eda"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+fab-control = { git = "https://github.com/CrimsonCosmos/fab2-control-plane", rev = "e2b736cb98b78d38b2a6120b38131b551591a209" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.test]
+opt-level = 2
