@@ -17,8 +17,11 @@ Design decisions
     clear of the pour.  The pours themselves stay in board.power_pours (fill_zones re-emits them).
   * Net classes: nets that need more than the default width (IPC-2221 from net current, or explicit width) get a
     KiCad net class with that track width, set in pcbnew design settings before the DSN export.
-  * Freerouting 2.1.0 ignores its pass limit, so the only hard bound is the wall-clock timeout (the SES is only written
-    at the end).  On timeout/failure FreeroutingError is raised and the caller falls back to the builtin router.
+  * Freerouting 2.1.0 ignores its pass/timeout settings in CLI mode (it runs up to ~1000 passes), and writes the SES only
+    when it finishes.  We therefore launch it through a tiny compiled shim (FrShim, built once with javac into
+    $FORGE_HOME/tools) that stops the auto-router gracefully on a stop-file / soft timeout; the Python side watches the
+    pass log and requests the stop when the score stagnates.  Without javac only a hard kill is possible (result lost,
+    FreeroutingError, caller falls back to the builtin router).
 
 Tool provisioning: `install_freerouting()` downloads the pinned release from github.com/freerouting/freerouting,
 verifies SHA-256 and caches it under $FORGE_HOME/tools/ (never committed).  Requires Java >= 21 (2.1.0 is Java-21 bytecode;
@@ -71,6 +74,7 @@ class FreeroutingOptions:
     java: str = "java"
     jar: str | None = None
     verbose: bool = False
+    stall_passes: int = 30            # stop when the score has not improved for this many passes
 
 
 # ---------------------------------------------------------------------------------------------------- provisioning
@@ -240,6 +244,61 @@ def _patch_dsn(text: str, board: Board) -> str:
     return text
 
 
+
+_SHIM_SRC = """
+import app.freerouting.management.RoutingJobScheduler;
+import app.freerouting.core.RoutingJob;
+import java.io.File;
+
+/** Runs Freerouting's main(); asks the auto-router to stop after -Dforge.softstop seconds or when the file
+ *  -Dforge.stopfile appears.  The job then finishes normally and writes its best board (Freerouting 2.1 ignores its
+ *  own pass / timeout settings in CLI mode). */
+public class FrShim {
+    public static void main(String[] args) throws Exception {
+        final long secs = Long.getLong("forge.softstop", 0L);
+        final String sf = System.getProperty("forge.stopfile", "");
+        final long t0 = System.currentTimeMillis();
+        Thread w = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(500L);
+                    boolean stop = (secs > 0 && System.currentTimeMillis() - t0 > secs * 1000L) || (!sf.isEmpty() && new File(sf).exists());
+                    if (!stop) continue;
+                    for (RoutingJob j : RoutingJobScheduler.getInstance().listJobs()) {
+                        if (j.thread != null) { j.thread.request_stop_auto_router(); j.thread.requestStop(); }
+                    }
+                } catch (Exception e) { }
+            }
+        });
+        w.setDaemon(true);
+        w.start();
+        app.freerouting.Freerouting.main(args);
+    }
+}
+""".replace("import app.freerouting.management.RoutingJobScheduler;", "import app.freerouting.management.RoutingJobScheduler;")
+
+
+def shim_dir(jar: Path) -> Path | None:
+    """Compile the launcher shim (needs javac) next to the jar; None if no JDK compiler is available."""
+    d = jar.parent / f"shim-{FREEROUTING_VERSION}"
+    marker = d / "FrShim.class"
+    src_hash = hashlib.sha256(_SHIM_SRC.encode()).hexdigest()[:12]
+    stamp = d / f"{src_hash}.stamp"
+    if marker.exists() and stamp.exists():
+        return d
+    javac = shutil.which("javac")
+    if not javac:
+        return None
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "FrShim.java").write_text(_SHIM_SRC)
+    env = dict(os.environ, JAVA_TOOL_OPTIONS="")
+    cp = subprocess.run([javac, "-proc:none", "-cp", str(jar), "-d", str(d), str(d / "FrShim.java")], capture_output=True, text=True, timeout=120, env=env)
+    if cp.returncode != 0 or not marker.exists():
+        return None
+    stamp.write_text("ok")
+    return d
+
+
 def parse_ses(text: str) -> dict:
     """Specctra session -> {"tracks": [...], "vias": [...]} in mm / board coordinates (y flipped back)."""
     toks = re.findall(r'"[^"]*"|\(|\)|[^\s()]+', text)
@@ -368,24 +427,67 @@ def route_with_freerouting(board: Board, opt: FreeroutingOptions | None = None) 
         dsn_p.write_text(_patch_dsn(dsn_p.read_text(), board))
 
         tmpd = work / "jtmp"                               # isolated java.io.tmpdir => private freerouting.json / log
+        shutil.rmtree(tmpd, ignore_errors=True)
         (tmpd / "freerouting").mkdir(parents=True, exist_ok=True)
         (tmpd / "freerouting" / "freerouting.json").write_text(_settings_json())
-        cmd = [shutil.which(o.java) or o.java, f"-Xmx{o.max_heap_mb}m", "-Djava.awt.headless=true", f"-Djava.io.tmpdir={tmpd}",
-               "-jar", str(jar), "-de", str(dsn_p), "-do", spec["ses"], "-mt", str(o.threads), "-da"]
+        shim = shim_dir(jar)
+        stopfile = work / "stop.flag"
+        stopfile.unlink(missing_ok=True)
+        if shim is not None:
+            cmd = [shutil.which(o.java) or o.java, f"-Xmx{o.max_heap_mb}m", "-Djava.awt.headless=true", f"-Djava.io.tmpdir={tmpd}",
+                   f"-Dforge.stopfile={stopfile}", f"-Dforge.softstop={int(o.timeout_s)}",
+                   "-cp", f"{jar}{os.pathsep}{shim}", "FrShim", "-de", str(dsn_p), "-do", spec["ses"], "-mt", str(o.threads), "-da"]
+        else:                                              # no javac: plain jar, hard kill only (loses the result)
+            cmd = [shutil.which(o.java) or o.java, f"-Xmx{o.max_heap_mb}m", "-Djava.awt.headless=true", f"-Djava.io.tmpdir={tmpd}",
+                   "-jar", str(jar), "-de", str(dsn_p), "-do", spec["ses"], "-mt", str(o.threads), "-da"]
         env = dict(os.environ)
         env["JAVA_TOOL_OPTIONS"] = ""
         t1 = time.time()
-        cp = subprocess.Popen(cmd, cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        flog = tmpd / "freerouting" / "freerouting.log"
+        cp = subprocess.Popen(cmd, cwd=str(work), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        best_key, best_pass, last_pass, offset = None, 0, 0, 0
+        stop_sent = False
+        hard = o.timeout_s + 60.0
+        while cp.poll() is None:
+            time.sleep(0.5)
+            el = time.time() - t1
+            if el > hard:
+                cp.kill()
+                cp.wait()
+                raise FreeroutingError(f"Freerouting did not stop within {hard:.0f}s")
+            if shim is None and el > o.timeout_s:
+                cp.kill()
+                cp.wait()
+                raise FreeroutingError(f"Freerouting timed out after {o.timeout_s:.0f}s (no javac: cannot stop it gracefully)")
+            if stop_sent or shim is None:
+                continue
+            try:                                           # stagnation: no better score for `stall_passes` passes => stop
+                with open(flog, "r", errors="replace") as f:
+                    f.seek(offset)
+                    chunk = f.read()
+                    offset = f.tell()
+            except OSError:
+                continue
+            for m in re.finditer(r"pass #(\d+) .*?score of ([\d.]+) \((\d+) unrouted\)|pass #(\d+) .*?score of ([\d.]+)\.", chunk):
+                n = int(m.group(1) or m.group(4))
+                score = float(m.group(2) or m.group(5))
+                unr = int(m.group(3) or 0)
+                last_pass = n
+                key = (-unr, score)
+                if best_key is None or key > (best_key[0], best_key[1] + 0.01):
+                    best_key, best_pass = key, n
+            if last_pass - best_pass >= o.stall_passes:
+                stopfile.write_text("stop")
+                stop_sent = True
+        if o.verbose:
+            print(f"freerouting: {last_pass} passes, rc={cp.returncode}")
+        out = ""
         try:
-            out, _ = cp.communicate(timeout=o.timeout_s)
-        except subprocess.TimeoutExpired:
-            cp.kill()
-            cp.communicate()
-            raise FreeroutingError(f"Freerouting timed out after {o.timeout_s:.0f}s")
+            out = flog.read_text(errors="replace")
+        except OSError:
+            pass
         t_fr = time.time() - t1
         (work / "freerouting.log").write_text(out or "")
-        if o.verbose:
-            print((out or "")[-800:])
         if cp.returncode != 0 or not Path(spec["ses"]).exists():
             raise FreeroutingError(f"Freerouting failed (rc={cp.returncode}): {(out or '')[-400:]}")
         res = parse_ses(Path(spec["ses"]).read_text())
