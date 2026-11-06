@@ -1,13 +1,17 @@
 """Deterministic footprint generators.
 
-Dimensions follow KiCad's official IPC-7351 nominal land patterns (tests compare
-against the official library when the network is available). Footprints from
-datasheets / KiCad imports can be registered with `register()`; anything the
-research agent finds goes through the same registry.
+KiCad's local libraries (/usr/share/kicad/footprints, override KICAD_FOOTPRINT_DIR) are the source of
+truth: `resolve_footprint` maps 'Library:Name' and our legacy short names to them. The generators below are
+ONLY the offline fallback when no KiCad library is installed (Footprint.source = 'generator:...').
+Footprints from datasheets can still be registered with `register()`.
 """
 from __future__ import annotations
 
+import os
 import re
+from functools import lru_cache
+from pathlib import Path
+
 from .model import Footprint, Pad
 
 _REGISTRY: dict[str, Footprint] = {}
@@ -235,25 +239,239 @@ def testpoint(d: float = 1.5) -> Footprint:
                      (-d / 2 - 0.3, -d / 2 - 0.3, d / 2 + 0.3, d / 2 + 0.3), [], 0.1)
 
 
+# ---- KiCad library access (source of truth) ------------------------------------------
+_CHIPM = {"0402": "1005", "0603": "1608", "0805": "2012", "1206": "3216", "1210": "3225", "2512": "6332"}
+_DIRS_CACHE: dict = {}
+
+
+def kicad_dir() -> Path | None:
+    """Root of KiCad's *.pretty libraries: $KICAD_FOOTPRINT_DIR, $KICAD_FOOTPRINTS, then the usual install paths."""
+    cands = [os.environ.get("KICAD_FOOTPRINT_DIR"), os.environ.get("KICAD_FOOTPRINTS"),
+             os.environ.get("KICAD7_FOOTPRINT_DIR"), os.environ.get("KICAD8_FOOTPRINT_DIR"),
+             "/usr/share/kicad/footprints", "/usr/local/share/kicad/footprints",
+             "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"]
+    for c in cands:
+        if c and Path(c).is_dir() and any(Path(c).glob("*.pretty")):
+            return Path(c)
+    return None
+
+
+def kicad_available() -> bool:
+    return kicad_dir() is not None
+
+
+def kicad_mod_path(lib_id: str) -> Path | None:
+    """'Library:Name' -> .kicad_mod path (None if absent)."""
+    root = kicad_dir()
+    if root is None or ":" not in lib_id:
+        return None
+    lib, name = lib_id.split(":", 1)
+    p = root / f"{lib}.pretty" / f"{name}.kicad_mod"
+    return p if p.is_file() else None
+
+
+def _names(lib: str) -> list[str]:
+    root = kicad_dir()
+    key = (str(root), lib)
+    if key not in _DIRS_CACHE:
+        d = root / f"{lib}.pretty" if root else None
+        _DIRS_CACHE[key] = sorted(f.stem for f in d.glob("*.kicad_mod")) if d and d.is_dir() else []
+    return _DIRS_CACHE[key]
+
+
+def _first(lib: str, prefix: str, exclude=("Handsolder", "HandSolder", "Pad", "Mask", "Drawing")) -> str | None:
+    """Shortest footprint name in `lib` starting with `prefix` (plain variants first)."""
+    c = [n for n in _names(lib) if n.startswith(prefix) and not any(x in n[len(prefix):] for x in exclude)]
+    return f"{lib}:{min(c, key=lambda n: (len(n), n))}" if c else None
+
+
+def legacy_to_kicad(name: str) -> str | None:
+    """Our short footprint names -> 'Library:Name' in KiCad's libraries (None if there is no mapping or it is absent)."""
+    cand: str | None = None
+    if (m := re.fullmatch(r"(R|C|L|D|LED|FB|F)_(0402|0603|0805|1206|1210|2512)", name)):
+        k, code = m.groups()
+        lib = {"R": "Resistor_SMD", "C": "Capacitor_SMD", "L": "Inductor_SMD", "FB": "Inductor_SMD", "D": "Diode_SMD",
+               "LED": "LED_SMD", "F": "Fuse"}[k]
+        base = {"FB": "L", "F": "Fuse"}.get(k, k)
+        cand = f"{lib}:{base}_{code}_{_CHIPM[code]}Metric"
+    elif (m := re.fullmatch(r"SOIC-(\d+)", name)):
+        cand = _first("Package_SO", f"SOIC-{m.group(1)}_")
+    elif name == "SOIC-8-EP":
+        cand = "Package_SO:SOIC-8-1EP_3.9x4.9mm_P1.27mm_EP2.41x3.81mm"
+    elif (m := re.fullmatch(r"TSSOP-(\d+)", name)):
+        cand = _first("Package_SO", f"TSSOP-{m.group(1)}_")
+    elif name == "SOT-23":
+        cand = "Package_TO_SOT_SMD:SOT-23"
+    elif (m := re.fullmatch(r"SOT-23-([56])", name)):
+        cand = f"Package_TO_SOT_SMD:SOT-23-{m.group(1)}"
+    elif name == "SOT-223":
+        cand = "Package_TO_SOT_SMD:SOT-223-3_TabPin2"
+    elif name in ("TO-252", "DPAK"):
+        cand = "Package_TO_SOT_SMD:TO-252-2"
+    elif name == "TO-220-3":
+        cand = "Package_TO_SOT_THT:TO-220-3_Vertical"
+    elif (m := re.fullmatch(r"LQFP-(\d+)", name)):
+        cand = _first("Package_QFP", f"LQFP-{m.group(1)}_")
+    elif (m := re.fullmatch(r"QFN-(\d+)-(\d+(?:\.\d+)?)x\d+(?:\.\d+)?(?:-EP(\d+(?:\.\d+)?))?(?:-P(\d+(?:\.\d+)?))?", name)):
+        n, b, ep, pitch = m.groups()
+        pitch = pitch or "0.5"
+        cand = (f"Package_DFN_QFN:QFN-{n}-1EP_{b}x{b}mm_P{pitch}mm_EP{ep}x{ep}mm" if ep
+                else _first("Package_DFN_QFN", f"QFN-{n}_{b}x{b}mm_P{pitch}mm"))
+        if cand and kicad_mod_path(cand) is None and ep:
+            cand = _first("Package_DFN_QFN", f"QFN-{n}-1EP_{b}x{b}mm_P{pitch}mm")
+    elif (m := re.fullmatch(r"D_(SMA|SMB|SMC)", name)):
+        cand = f"Diode_SMD:D_{m.group(1)}"
+    elif name == "XTAL-3225":
+        cand = "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm"
+    elif (m := re.fullmatch(r"HDR-([12])x(\d+)", name)):
+        cand = f"Connector_PinHeader_2.54mm:PinHeader_{m.group(1)}x{int(m.group(2)):02d}_P2.54mm_Vertical"
+    elif (m := re.fullmatch(r"JST-XH-(\d+)", name)):
+        n = int(m.group(1))
+        cand = f"Connector_JST:JST_XH_B{n}B-XH-A_1x{n:02d}_P2.50mm_Vertical"
+    elif (m := re.fullmatch(r"TB-5\.08-(\d+)", name)):
+        n = int(m.group(1))
+        cand = f"TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-{n}-5.08_1x{n:02d}_P5.08mm_Horizontal"
+    elif name == "XT60PW":
+        cand = "Connector_AMASS:AMASS_XT60PW-M_1x02_P7.20mm_Horizontal"
+    elif (m := re.fullmatch(r"CP-D(\d+(?:\.\d+)?)", name)):
+        d = float(m.group(1))
+        pitch = {5.0: "2.00", 6.3: "2.50", 8.0: "3.50", 10.0: "5.00", 12.5: "5.00"}.get(d)
+        cand = f"Capacitor_THT:CP_Radial_D{d:.1f}mm_P{pitch}mm" if pitch else None
+    elif (m := re.fullmatch(r"MH-M(\d+(?:\.\d+)?)", name)):
+        d = m.group(1)
+        cand = f"MountingHole:MountingHole_{d}mm_M{int(float(d))}" if float(d) in (2.2, 2.7, 3.2, 4.3, 5.3, 6.4) else None
+    elif (m := re.fullmatch(r"TP-(\d+(?:\.\d+)?)", name)):
+        cand = f"TestPoint:TestPoint_Pad_D{m.group(1)}mm"
+    elif (m := re.fullmatch(r"IND-(\d+)x\d+", name)):
+        cand = _first("Inductor_SMD", f"L_{m.group(1)}x{m.group(1)}mm_H") if int(m.group(1)) == 12 else None
+    return cand if cand and kicad_mod_path(cand) else None
+
+
+@lru_cache(maxsize=2048)
+def _load_kicad(lib_id: str, root: str) -> Footprint | None:
+    p = kicad_mod_path(lib_id)
+    if p is None:
+        return None
+    from .kicad_mod import parse_footprint
+    fp = parse_footprint(p.read_text())
+    fp.name = lib_id.split(":", 1)[1]
+    fp.source = f"kicad:{lib_id}"
+    fp.lib_id = lib_id
+    return fp
+
+
+def kicad_footprint(lib_id: str) -> Footprint | None:
+    """Parse a footprint straight from the KiCad library ('Library:Name'); None if the library/file is missing."""
+    root = kicad_dir()
+    return _load_kicad(lib_id, str(root)) if root else None
+
+
+def is_kicad_id(spec: str) -> bool:
+    return ":" in spec and not spec.startswith("studioforge:")
+
+
 # ---- resolver --------------------------------------------------------------------
 def resolve_footprint(spec) -> Footprint:
+    """Footprint object | 'Library:Name' (KiCad) | legacy short name -> Footprint. KiCad's library wins; our
+    generators are only the offline fallback (Footprint.source says which was used)."""
     if isinstance(spec, Footprint):
         return spec
     name = str(spec)
     if name in _REGISTRY:
         return _REGISTRY[name]
-    fp = _make(name)
-    # prefer the official KiCad geometry whenever it is already cached (pad numbers must still cover our pins)
-    try:
-        from .footprint_sync import cache_dir, official, kicad_path
-        if kicad_path(name) and (cache_dir() / (re.sub(r"[^A-Za-z0-9._+-]", "_", name) + ".kicad_mod")).exists():
-            off = official(name)
-            if off is not None and fp.pad_numbers() <= off.pad_numbers() | {""}:
-                fp = off
-    except Exception:
-        pass
+    fp: Footprint | None = None
+    if is_kicad_id(name):
+        lib_id = name[len("studioforge:"):] if name.startswith("studioforge:") else name
+        fp = kicad_footprint(lib_id)
+        if fp is None:
+            raise KeyError(f"KiCad footprint '{name}' not found under {kicad_dir()}")
+        _REGISTRY[name] = fp
+        return fp
+    lib_id = legacy_to_kicad(name)
+    if lib_id:
+        k = kicad_footprint(lib_id)
+        if k is not None:
+            fp = Footprint(name, k.pads, k.courtyard, k.silk, k.height, k.source, k.lib_id)
+    if fp is None:
+        fp = _make(name)
+        fp.source = f"generator:{'offline-fallback' if lib_id is None and kicad_available() is False else 'ipc-nominal'}"
     _REGISTRY[name] = fp
     return fp
+
+
+def search_footprints(query: str = "", pins: int | None = None, lib: str | None = None, limit: int = 20) -> list[dict]:
+    """Search KiCad's footprint libraries by keyword(s) (all must occur, case-insensitive, '-'/'_' equivalent)
+    and optionally by number of distinct pad numbers. Best match first. Rows: {lib_id, lib, name, pins}."""
+    root = kicad_dir()
+    if root is None:
+        return []
+    toks = [t for t in re.split(r"[\s,]+", re.sub(r"[-_]", " ", query.lower())) if t]
+    libs = [lib] if lib else sorted(p.name[:-7] for p in root.glob("*.pretty"))
+    rows = []
+    for lb in libs:
+        for n in _names(lb):
+            norm = re.sub(r"[-_]", " ", (lb + " " + n).lower())
+            if all(t in norm for t in toks):
+                rows.append((lb, n))
+    pref = ("Package_", "Resistor_SMD", "Capacitor_SMD", "Connector_", "LED_SMD", "Diode_SMD", "Inductor_SMD")
+    bad = ("handsolder", "mask", "drawing", "thermalvias", "pad_", "longpads", "wave", "reflow")
+
+    def score(r):
+        lb, n = r
+        nl = n.lower()
+        starts = 0 if (toks and re.sub(r"[-_]", " ", nl).startswith(" ".join(toks))) else 1
+        return (starts, sum(b in nl for b in bad if b not in query.lower()), not lb.startswith(pref), len(n), n)
+    rows.sort(key=score)
+    out = []
+    for lb, n in rows:
+        npads = _pin_count(lb, n)
+        if pins is not None and npads not in (pins, pins + 1):          # +1: exposed pad / tab not in the pin list
+            continue
+        out.append({"lib_id": f"{lb}:{n}", "lib": lb, "name": n, "pins": npads})
+        if len(out) >= limit:
+            break
+    return out
+
+
+find_footprints = search_footprints
+
+
+@lru_cache(maxsize=20000)
+def _pin_count(lib: str, name: str) -> int:
+    root = kicad_dir()
+    try:
+        txt = (root / f"{lib}.pretty" / f"{name}.kicad_mod").read_text()
+    except OSError:
+        return 0
+    return len({m for m in re.findall(r'\(pad "([^"]+)"', txt)})
+
+
+def footprint_for_package(package: str, pins: int | None = None, pin_numbers: set[str] | None = None) -> Footprint | None:
+    """Best real KiCad footprint for a datasheet package name ('SOIC-8', 'SOT-23-6', 'QFN-32-5x5', 'TSSOP-16' ...).
+    If `pin_numbers` is given the footprint must provide a pad for every one of them."""
+    if not kicad_available() or not package:
+        return None
+    pkg = package.strip()
+    cands: list[str] = []
+    try:
+        if pkg in _REGISTRY or legacy_to_kicad(pkg):
+            cands.append(resolve_footprint(pkg).lib_id)
+    except KeyError:
+        pass
+    if is_kicad_id(pkg):
+        cands.append(pkg)
+    alias = re.sub(r"^(SO|SOP)[-_ ]?(\d+)$", r"SOIC-\2", pkg, flags=re.I)
+    for q in dict.fromkeys([pkg, alias, re.sub(r"[-_ ]?(EP|PowerPAD|thermal).*$", "", pkg, flags=re.I)]):
+        if q:
+            cands += [r["lib_id"] for r in search_footprints(q, pins=pins, limit=8)]
+    for lid in cands:
+        fp = kicad_footprint(lid) if lid else None
+        if fp is None:
+            continue
+        if pin_numbers is not None and not pin_numbers <= fp.pad_numbers():
+            continue
+        return fp
+    return None
 
 
 def _make(name: str) -> Footprint:

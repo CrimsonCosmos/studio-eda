@@ -67,17 +67,18 @@ class Footprint:
     silk: list[tuple] = field(default_factory=list)    # ('line',x1,y1,x2,y2) | ('circle',x,y,r)
     height: float = 1.0
     source: str = "generator:ipc-nominal"
+    lib_id: str = ""             # 'Library:Name' in KiCad's footprint libraries ('' = not a KiCad library footprint)
 
     def to_dict(self) -> dict:
         return {"name": self.name, "pads": [p.to_dict() for p in self.pads],
                 "courtyard": list(self.courtyard), "silk": [list(s) for s in self.silk],
-                "height": self.height, "source": self.source}
+                "height": self.height, "source": self.source, "lib_id": self.lib_id}
 
     @staticmethod
     def from_dict(d: dict) -> "Footprint":
         return Footprint(d["name"], [Pad(**p) for p in d["pads"]], tuple(d["courtyard"]),
                          [tuple(s) for s in d.get("silk", [])], d.get("height", 1.0),
-                         d.get("source", "unknown"))
+                         d.get("source", "unknown"), d.get("lib_id", ""))
 
     def pad_numbers(self) -> set[str]:
         return {p.number for p in self.pads if p.number}
