@@ -121,3 +121,26 @@ def test_plane_assignment(lib):
     b2 = place(mcu_circuit(lib), rules_for(2), PlaceOptions())
     assign_planes(b2)
     assert "GND" in b2.pour_nets and not b2.plane_nets
+
+
+def test_auto_pitch_follows_pad_geometry(lib):
+    """A 0.5 mm-pitch QFP on 0.2/0.2 rules needs a fine grid (corridor ~0.03 mm); coarse parts allow a fast coarse grid."""
+    from studioforge.model import Circuit
+    from studioforge.pcb.board import Board
+    from studioforge.pcb.router import auto_pitch
+    fine = mcu_circuit(lib)
+    g_fine, _ = auto_pitch(Board(fine, rules_for(2), 30, 30), 0.2, 0.2)
+    g_fine4, _ = auto_pitch(Board(fine, rules_for(4), 30, 30), 0.15, 0.15)
+    assert g_fine <= 0.075 and g_fine4 >= g_fine
+    coarse = Circuit("coarse")
+    coarse.add(lib.header(8), prefix="J")
+    coarse.add(lib.resistor(1e3, "0805"), prefix="R")
+    g_coarse, _ = auto_pitch(Board(coarse, rules_for(2), 30, 30), 0.2, 0.2)
+    assert g_coarse >= 0.15
+
+
+def test_breakout_margin_grows_board_for_fine_pitch(lib):
+    from studioforge.pcb.placement import _auto_size, breakout_margin, PlaceOptions
+    assert breakout_margin(48) > breakout_margin(8) > breakout_margin(2) == 0
+    w, h = _auto_size(mcu_circuit(lib), PlaceOptions())
+    assert w * h > 20 * 20

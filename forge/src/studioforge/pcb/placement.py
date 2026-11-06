@@ -29,6 +29,11 @@ from .rules import Rules
 ROTS = (0, 90, 180, 270)
 
 
+def breakout_margin(npads: int) -> float:
+    """Extra courtyard (per side) so fine-pitch / many-pin parts keep escape channels for the router."""
+    return 1.0 if npads >= 20 else 0.35 if npads >= 6 else 0.0
+
+
 @dataclass
 class PlaceOptions:
     width: float | None = None
@@ -68,7 +73,7 @@ class _Placer:
             fp = comp.footprint
             npads = len(fp.pads)
             # breakout room: fine-pitch / many-pin parts need escape channels around them
-            cm = self.o.courtyard_margin / 2 + (1.0 if npads >= 20 else 0.35 if npads >= 6 else 0.0)
+            cm = self.o.courtyard_margin / 2 + breakout_margin(npads)
             per_c, per_p = {}, {}
             for rt in ROTS:
                 x0, y0, x1, y1 = fp.oriented_courtyard(rt)
@@ -476,8 +481,9 @@ def _auto_size(circuit: Circuit, opt: PlaceOptions) -> tuple[float, float]:
     big = 0.0
     for comp in circuit.components.values():
         x0, y0, x1, y1 = comp.footprint.courtyard
-        area += (x1 - x0 + 0.4) * (y1 - y0 + 0.4)
-        big = max(big, x1 - x0, y1 - y0)
+        m = 0.4 + 2 * breakout_margin(len(comp.footprint.pads))
+        area += (x1 - x0 + m) * (y1 - y0 + m)
+        big = max(big, x1 - x0 + m, y1 - y0 + m)
     A = area / opt.utilization
     W = max(math.sqrt(A * opt.aspect), big + 2 * opt.edge_margin + 4)
     H = max(A / W, big + 2 * opt.edge_margin + 4)

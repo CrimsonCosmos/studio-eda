@@ -13,14 +13,14 @@ E12 = [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2]
 _ROLE_PATTERNS = [
     ("vin", r"^(VIN|IN|PVIN|AVIN|VCC|VDD|V\+|VS)$"),
     ("vout", r"^(VOUT|OUT)$"),
-    ("sw", r"^(SW|LX|PH|SWITCH)$"),
+    ("sw", r"^(SW|LX|PH|SWITCH|SW_?\d?)$"),
     ("boot", r"^(BOOT|VBST|BST|CB|BOOTSTRAP)$"),
-    ("fb", r"^(FB|VFB|VSENSE|ADJ)$"),
-    ("en", r"^(EN|ENABLE|ON/OFF|~?SHDN)$"),
+    ("fb", r"^(FB|VFB|VSENSE|ADJ|SENSE)$"),
+    ("en", r"^(EN|ENA|ENABLE|ON/OFF|~?SHDN)$"),
     ("gnd", r"^(GND|PGND|AGND|VSS|V-|COM)$"),
     ("comp", r"^COMP$"),
     ("rt", r"^(RT|RT/CLK|FSW|RT/SYNC)$"),
-    ("pad", r"^(PAD|EP|THERMAL|TAB)$"),
+    ("pad", r"^(PAD|EP|EPAD|DAP|TPAD|POWERPAD|THERMAL|TAB)$"),
 ]
 
 

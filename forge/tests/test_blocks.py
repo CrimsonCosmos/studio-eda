@@ -85,3 +85,22 @@ def test_connector_family_follows_current(lib):
     hi = build_block(lib, "connector_breakout", {"pins": [{"name": "p"}, {"name": "g"}], "max_current_a": 25, "voltage": 48})
     assert "XH" in next(iter(lo.components.values())).part.mpn
     assert "XT60" in next(iter(hi.components.values())).part.mpn
+
+
+def test_researched_part_drives_block_with_safe_defaults(lib):
+    """A part that arrived through the research path (no TI-specific hysteresis data) must still yield a correct,
+    flagged design: catch diode because it is non-synchronous, generic EN divider + explicit warning."""
+    from studioforge.footprints import resolve_footprint
+    from studioforge.model import PartDef, PinDef
+    pins = [PinDef("1", "BOOT"), PinDef("2", "NC", "nc"), PinDef("3", "NC", "nc"), PinDef("4", "VSENSE", "input"), PinDef("5", "ENA", "input"),
+            PinDef("6", "GND", "power_in"), PinDef("7", "VIN", "power_in"), PinDef("8", "PH", "output"), PinDef("9", "DAP", "power_in")]
+    lib.put(PartDef("TPS5430DDA", "Texas Instruments", "36V 3A buck", "ic.regulator.buck", "SO-PowerPAD-8", pins, "SOIC-8-EP",
+                    {"vin_min": 5.5, "vin_max": 36, "vout_min": 1.23, "vout_max": 31, "iout_max": 3.0, "vref": 1.221, "fsw_khz": 500, "sync": False,
+                     "en_max": 7, "roles": {"vin": "VIN", "sw": "PH", "boot": "BOOT", "fb": "VSENSE", "en": "ENA", "gnd": "GND", "pad": "DAP"}},
+                    provenance="researched", verified=True))
+    c = build_block(lib, "buck_converter", {"vin_min": 12, "vin_max": 30, "vout": 5.0, "iout": 2.5, "part": "TPS5430DDA"})
+    assert [i.msg for i in run_erc(c) if i.severity == "error"] == []
+    cats = [x.part.category for x in c.components.values()]
+    assert "diode" in cats                                              # non-synchronous => catch diode
+    assert any("enable-pin thresholds not in the catalog" in w for w in c.warnings)
+    assert abs(c.ports["vout"].voltage - 5.0) / 5.0 < 0.01              # feedback computed from the researched Vref (1.221 V)

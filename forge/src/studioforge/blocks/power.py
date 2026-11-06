@@ -99,8 +99,13 @@ def buck_converter(lib: PartsLibrary, vin_min=9.0, vin_max=17.0, vout=None, iout
     if iout > 0.85 * p.get("iout_max", iout):
         c.warnings.append(f"buck {ic_part.mpn}: load {iout:g} A is >85% of its {p['iout_max']:g} A rating - little thermal margin")
     roles = infer_roles(ic_part)
-    fsw = p.get("fsw", 500e3)
+    fsw = p.get("fsw") or p.get("fsw_khz", 500) * 1e3
+    if "vref" not in p:
+        raise ValueError(f"{ic_part.mpn}: params['vref'] missing - re-run research with the required keys")
     vref = p["vref"]
+    non_sync = p.get("needs_catch_diode", p.get("sync") is False)
+    if "sync" not in p and "needs_catch_diode" not in p:
+        c.warnings.append(f"buck {ic_part.mpn}: topology (synchronous vs catch diode) not recorded in the catalog - assuming synchronous; VERIFY against the datasheet")
     ic = c.add(ic_part, prefix="U", block="buck")
     one = lambda r: f"{ic.ref}.{roles[r][0]}"
     miss = [r for r in ("vin", "sw", "fb", "gnd") if r not in roles]
@@ -189,21 +194,33 @@ def buck_converter(lib: PartsLibrary, vin_min=9.0, vin_max=17.0, vout=None, iout
         if vin_max <= p.get("en_max", 5.5):
             c.connect("VIN", en_pin)
         else:
-            # programmable UVLO divider (datasheet Eq. 40/41 for devices with hysteresis current)
-            ven = p.get("vref_en", 1.2)
-            vstart = max(vin_min * 0.92, ven * 2)
-            vstop = vstart * 0.8
-            ihys = 3.4e-6
-            r1 = e96((vstart - vstop) / ihys)
-            r2 = e96(ven / ((vstart - ven) / r1 + 1.2e-6))
+            if "vref_en" in p:
+                # programmable UVLO divider with hysteresis current (TI TPS5436x datasheet Eq. 40/41)
+                ven = p["vref_en"]
+                vstart = max(vin_min * 0.92, ven * 2)
+                vstop = vstart * 0.8
+                ihys = 3.4e-6
+                r1 = e96((vstart - vstop) / ihys)
+                r2 = e96(ven / ((vstart - ven) / r1 + 1.2e-6))
+                note = f"EN divider {fmt_si(r1)}/{fmt_si(r2)}: start {vstart:.1f} V stop {vstop:.1f} V"
+            else:
+                # generic: EN threshold not in the catalog -> conservative divider, flagged for review
+                en_th = p.get("en_th", 1.4)
+                r2 = 100e3
+                r1 = e96(r2 * (vin_min * 0.9 / (1.5 * en_th) - 1))
+                ven_max = vin_max * r2 / (r1 + r2)
+                note = f"EN divider {fmt_si(r1)}/{fmt_si(r2)} (assumed EN threshold {en_th:g} V; EN at Vin max = {ven_max:.1f} V)"
+                c.warnings.append(f"buck {ic_part.mpn}: enable-pin thresholds not in the catalog; divider assumes {en_th:g} V - verify against the datasheet")
+                if ven_max > p.get("en_max", 5.5):
+                    c.warnings.append(f"buck {ic_part.mpn}: EN reaches {ven_max:.1f} V at Vin max (> {p.get('en_max', 5.5):g} V limit)")
             ra, rb = c.add(lib.resistor(r1, "0603", power_w=0.1), prefix="R", block="buck"), c.add(lib.resistor(r2, "0402"), prefix="R", block="buck")
             c.connect("VIN", f"{ra.ref}.1")
             c.connect("EN", en_pin, f"{ra.ref}.2", f"{rb.ref}.1")
             c.connect("GND", f"{rb.ref}.2")
-            c.calcs["uvlo"] = f"EN divider {fmt_si(r1)}/{fmt_si(r2)}: start {vstart:.1f} V stop {vstop:.1f} V"
+            c.calcs["uvlo"] = note
     # ---- non-synchronous: catch diode + RT + compensation ------------------------------------------------------------------------
     diode = None
-    if p.get("needs_catch_diode"):
+    if non_sync:
         dp = lib.require("diode", {"vr": (">=", vin_max), "if": (">=", iout * 1.2)}, tags=["schottky"],
                          need=f"Schottky catch diode Vr >= {vin_max:g} V, If >= {iout * 1.2:.1f} A")
         diode = c.add(dp, prefix="D", block="buck", power_w=dp.params.get("vf", 0.6) * iout * (1 - d))

@@ -42,6 +42,39 @@ def _inside_pad(p, x: float, y: float, margin: float = 0.0) -> bool:
     return dx <= hw + 1e-9 and dy <= hh + 1e-9
 
 
+def auto_pitch(board: Board, track: float, clearance: float, max_cells: float = 3.2e6) -> tuple[float, str]:
+    """Largest routing-grid pitch that still guarantees a legal track line inside every pad's escape corridor.
+
+    For two neighbouring pads whose centres are `pitch` apart, a track running along one pad's centre line must stay
+    (clearance + track/2 + margin) away from the neighbour's edge, leaving a corridor of width
+    W = 2 * (pitch - neighbour_half_width - clearance - track/2 - 0.35*g). A grid line is guaranteed inside iff W >= g."""
+    seen: dict[str, list[tuple[float, float]]] = {}
+    for comp in board.circuit.components.values():
+        fp = comp.footprint
+        if fp.name in seen:
+            continue
+        pairs: list[tuple[float, float]] = []                    # (centre pitch across, neighbour across-size)
+        pads = fp.pads
+        for i, a in enumerate(pads):
+            for b in pads[i + 1:]:
+                if a.number == b.number or a.drill or b.drill:
+                    continue
+                dx, dy = abs(a.x - b.x), abs(a.y - b.y)
+                if min(dx, dy) < 0.12 and max(dx, dy) < 1.6:       # neighbours in a row
+                    across = b.h if dx < dy else b.w
+                    pairs.append((max(dx, dy), across))
+        seen[fp.name] = pairs
+    worst = [(p, a) for pr in seen.values() for (p, a) in pr]
+    area = board.width * board.height
+    for g in (0.25, 0.2, 0.15, 0.125, 0.1, 0.075, 0.05):
+        if area / (g * g) > max_cells:
+            continue
+        if all(2 * (p - a / 2 - clearance - track / 2 - 0.35 * g) >= g for p, a in worst):
+            return g, f"escape corridor ok at {g} mm"
+    g = max(0.05, math.sqrt(area / max_cells))
+    return g, f"WARNING: fine-pitch pads need a finer grid than {g:.3f} mm allows - some pads may be unreachable"
+
+
 DIRS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]   # index = heading
 SQ2 = math.sqrt(2.0)
 
@@ -89,7 +122,11 @@ class GridRouter:
         self.nl = len(self.layers)
         W, H = board.width, board.height
         area = W * H
-        g = self.o.pitch or max(0.1, round(math.sqrt(area / 1.2e6) / 0.05) * 0.05)
+        if self.o.pitch:
+            g, why = self.o.pitch, "fixed"
+        else:
+            g, why = auto_pitch(board, r.track, r.clearance)
+        self.pitch_note = why
         self.g = g
         self.nx = int(math.ceil(W / g)) + 1
         self.ny = int(math.ceil(H / g)) + 1
@@ -747,6 +784,8 @@ class GridRouter:
             self.o.max_expansions = old
         self.failed = sorted((set(self.failed) - {n for n in self.routed if self._net_done(n)}) | plane_fail)
         self._write_board()
+        if self.pitch_note.startswith("WARNING"):
+            b.warnings.append("router grid: " + self.pitch_note)
         b.stats.update({"route_time_s": round(time.time() - t0, 2), "grid_pitch": self.g, **self.stats,
                         "unrouted": list(self.failed)})
         b.warnings.extend(self.warnings)

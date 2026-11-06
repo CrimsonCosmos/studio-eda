@@ -72,8 +72,17 @@ compares the **actually computed** build cost (BOM + PCB + assembly at the real 
 | Gerber/drill | parsed by gerbonara; pad/via/track/drill coordinates compared 1:1 with the board model |
 | KiCad output | parsed by kiutils; counts of footprints/vias/nets match |
 | Resolver | unit tests for demand propagation, windows, address clashes, connector/wire sizing, buy-vs-build |
+| Research agent | live run: found TPS5430DDA on the web, downloaded TI's official datasheet + an app note (SHA-256 recorded), extracted the pinout, corrected an overlapping land pattern after our validator rejected it, `verified=True`; the part then drove a block builder |
+| Supervisor LLM | live run: headless Claude Code wrote a plan with sourced product URLs; the resolver rejected it once (3.28 V rail vs 3.3 V minimum), Claude repaired it, the buy-vs-build step applied the policy (`examples/live_supervisor_24v_joint/`) |
+| MCP server | connects, lists tools and builds a DRC-clean board through the **official `mcp` Python client** |
+| Final boards | humanoid example: both board types DRC-clean; Excellon hits identical to the hole set recomputed from the exported `.kicad_pcb` (462 / 351) |
+
+## Example outputs
+`examples/humanoid/` (offline archetype, $50k budget → ~$28.7k, two board types ready for fab review) and
+`examples/live_supervisor_24v_joint/` (plan written by the live supervisor). See `examples/README.md`.
 
 ## Honest limitations
+* The built-in router is a Python grid router: dense boards may need several automatic layout attempts (the 15 A joint board ended at 125 × 92 mm after 5 attempts / ~8 min).
 * Nothing here has been sent to a fab. Run the fab's DFM check and open the Gerbers in KiCad/Gerbv first. `REPORT.md` ends with a checklist.
 * Seed pinouts are `verified=False` until `forge parts verify` matches them to a cached datasheet (STM32 datasheet host blocks automated downloads → use the research agent or download manually).
 * Land patterns are IPC-nominal generators; connectors/modules must be compared with manufacturer drawings.
