@@ -394,7 +394,7 @@ def resolve_footprint(spec) -> Footprint:
             fp = Footprint(name, k.pads, k.courtyard, k.silk, k.height, k.source, k.lib_id)
     if fp is None:
         fp = _make(name)
-        fp.source = f"generator:{'offline-fallback' if lib_id is None and kicad_available() is False else 'ipc-nominal'}"
+        fp.source = ("generator:offline-fallback" if not kicad_available() else "generator:ipc-nominal")
     _REGISTRY[name] = fp
     return fp
 
@@ -419,7 +419,7 @@ def search_footprints(query: str = "", pins: int | None = None, lib: str | None 
     def score(r):
         lb, n = r
         nl = n.lower()
-        starts = 0 if (toks and re.sub(r"[-_]", " ", nl).startswith(" ".join(toks))) else 1
+        starts = 0 if (toks and re.split(r"[-_ ]", nl)[0].startswith(toks[0])) else 1
         return (starts, sum(b in nl for b in bad if b not in query.lower()), not lb.startswith(pref), len(n), n)
     rows.sort(key=score)
     out = []
@@ -443,7 +443,7 @@ def _pin_count(lib: str, name: str) -> int:
         txt = (root / f"{lib}.pretty" / f"{name}.kicad_mod").read_text()
     except OSError:
         return 0
-    return len({m for m in re.findall(r'\(pad "([^"]+)"', txt)})
+    return len({a or b for a, b in re.findall(r'\(pad\s+(?:"([^"]+)"|([^\s()"]+))', txt)} - {""})
 
 
 def footprint_for_package(package: str, pins: int | None = None, pin_numbers: set[str] | None = None) -> Footprint | None:
@@ -461,7 +461,7 @@ def footprint_for_package(package: str, pins: int | None = None, pin_numbers: se
     if is_kicad_id(pkg):
         cands.append(pkg)
     alias = re.sub(r"^(SO|SOP)[-_ ]?(\d+)$", r"SOIC-\2", pkg, flags=re.I)
-    for q in dict.fromkeys([pkg, alias, re.sub(r"[-_ ]?(EP|PowerPAD|thermal).*$", "", pkg, flags=re.I)]):
+    for q in dict.fromkeys([alias, pkg, re.sub(r"[-_ ]?(EP|PowerPAD|thermal).*$", "", pkg, flags=re.I)]):
         if q:
             cands += [r["lib_id"] for r in search_footprints(q, pins=pins, limit=8)]
     for lid in cands:

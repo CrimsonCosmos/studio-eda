@@ -103,24 +103,107 @@ def test_part_roundtrip(lib):
     assert q.mpn == p.mpn and [x.number for x in q.pins] == [x.number for x in p.pins]
 
 
-def test_official_footprint_overrides_generator_and_is_reported(lib, tmp_path, monkeypatch):
-    """Official KiCad geometry (here a stub .kicad_mod served from a fake cache) replaces the generator and is recorded as the source."""
-    from studioforge import footprint_sync as fs, footprints as fpm
-    from studioforge.model import Circuit
-    xt = """(footprint "XT" (layer "F.Cu")
+def _fake_kicad(tmp_path, monkeypatch):
+    from studioforge import footprints as fpm
+    lib = tmp_path / "kicad" / "Connector_AMASS.pretty"
+    lib.mkdir(parents=True)
+    (lib / "AMASS_XT60PW-M_1x02_P7.20mm_Horizontal.kicad_mod").write_text("""(footprint "AMASS_XT60PW-M_1x02_P7.20mm_Horizontal" (layer "F.Cu")
       (pad "1" thru_hole circle (at 0 0) (size 4.1 4.1) (drill 2.7) (layers "*.Cu" "*.Mask"))
       (pad "2" thru_hole circle (at 7.2 0) (size 4.1 4.1) (drill 2.7) (layers "*.Cu" "*.Mask"))
-      (pad "" np_thru_hole circle (at -3.15 -6) (size 1.7 1.7) (drill 1.7) (layers "*.Cu" "*.Mask")))"""
-    monkeypatch.setattr(fs, "fetch", lambda name, home=None, timeout=20: (tmp_path / "x.kicad_mod") if name == "XT60PW" else None)
-    (tmp_path / "x.kicad_mod").write_text(xt)
+      (pad "" np_thru_hole oval (at -3.15 -6) (size 1.7 1.7) (drill oval 1.7 2.4) (layers "*.Cu" "*.Mask")))""")
+    monkeypatch.setenv("KICAD_FOOTPRINT_DIR", str(tmp_path / "kicad"))
     fpm._REGISTRY.pop("XT60PW", None)
-    c = Circuit("t")
-    j = c.add(lib.get("XT60PW-M"), prefix="J")
-    assert max(p.drill for p in j.footprint.pads) == 2.0                  # generator value (known to be wrong)
-    info = fs.sync_circuit(c)
-    assert info["XT60PW"].startswith("kicad:")
-    assert max(p.drill for p in c.components["J1"].footprint.pads) == 2.7  # official value adopted
-    fpm._REGISTRY.pop("XT60PW", None)
+    return fpm
+
+
+def test_kicad_library_overrides_generator_and_is_reported(lib, tmp_path, monkeypatch):
+    """KiCad's local library (a stub tree via KICAD_FOOTPRINT_DIR) replaces the generator and is recorded as the source."""
+    from studioforge import footprint_sync as fs
+    from studioforge.model import Circuit
+    fpm = _fake_kicad(tmp_path, monkeypatch)
+    try:
+        c = Circuit("t")
+        c.add(lib.get("XT60PW-M"), prefix="J")
+        info = fs.sync_circuit(c)
+        assert info["XT60PW"] == "kicad:Connector_AMASS:AMASS_XT60PW-M_1x02_P7.20mm_Horizontal"
+        assert c.calcs["footprint_sources"] == info
+        fp = c.components["J1"].footprint
+        assert max(p.drill for p in fp.pads) == 2.7 and fp.lib_id.startswith("Connector_AMASS:")
+        assert any(p.slot > 0 for p in fp.pads)                              # slotted locating peg survives
+    finally:
+        fpm._REGISTRY.pop("XT60PW", None)
+
+
+def test_generator_is_offline_fallback(monkeypatch, tmp_path):
+    from studioforge import footprints as fpm
+    monkeypatch.setenv("KICAD_FOOTPRINT_DIR", str(tmp_path))                 # no *.pretty here
+    monkeypatch.setattr(fpm, "kicad_dir", lambda: None)
+    fpm._REGISTRY.pop("SOIC-8", None)
+    try:
+        fp = fpm.resolve_footprint("SOIC-8")
+        assert fp.source.startswith("generator:") and fpm.search_footprints("SOIC-8") == []
+    finally:
+        fpm._REGISTRY.pop("SOIC-8", None)
+
+
+@pytest.mark.skipif(not __import__("studioforge.footprints", fromlist=["x"]).kicad_available(), reason="KiCad libraries not installed")
+class TestRealKicad:
+    def test_lib_id_and_legacy_resolve_to_kicad(self):
+        a = resolve_footprint("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm")
+        b = resolve_footprint("SOIC-8")
+        assert a.source == "kicad:Package_SO:SOIC-8_3.9x4.9mm_P1.27mm" and b.source == a.source and b.lib_id == a.lib_id
+        assert len(a.pads) == 8
+
+    def test_xt60pw_has_kicad_drills_and_slots(self):
+        fp = resolve_footprint("XT60PW")
+        assert max(p.drill for p in fp.pads) == pytest.approx(2.7) and any(p.slot > 0 for p in fp.pads)
+
+    def test_unknown_lib_id(self):
+        with pytest.raises(KeyError):
+            resolve_footprint("Package_SO:NOPE_123")
+
+    def test_all_seed_parts_use_kicad(self, lib):
+        from studioforge.footprint_sync import sync_circuit
+        from studioforge.model import Circuit
+        c = Circuit("all")
+        for p in lib.all():
+            c.add(p, prefix="U")
+        info = sync_circuit(c)
+        assert all(v.startswith("kicad:") for v in info.values()), info
+
+    def test_search_and_package_mapping(self):
+        from studioforge.footprints import find_footprints, footprint_for_package
+        r = find_footprints("SOIC-8", pins=8)
+        assert r and r[0]["lib_id"] == "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+        assert footprint_for_package("SOT-23-6", 6).lib_id == "Package_TO_SOT_SMD:SOT-23-6"
+        assert footprint_for_package("SO-8", 8).lib_id.startswith("Package_SO:SOIC-8")
+        assert footprint_for_package("Package_SO:TSSOP-16_4.4x5mm_P0.65mm", 16).pads
+
+    def test_parser_robustness_over_libraries(self):
+        """Every footprint of a sample of libraries parses; rotated/custom/roundrect pads give finite boxes."""
+        from studioforge import footprints as fpm
+        from studioforge.kicad_mod import parse_footprint
+        n = 0
+        for lb in ("Package_QFP", "Package_DFN_QFN", "Connector_USB", "Package_BGA", "Connector_Molex"):
+            for name in fpm._names(lb)[:60]:
+                fp = parse_footprint(fpm.kicad_mod_path(f"{lb}:{name}").read_text())
+                assert fp.pads and all(p.w > 0 and p.h > 0 for p in fp.pads), (lb, name)
+                x0, y0, x1, y1 = fp.courtyard
+                assert x1 > x0 and y1 > y0
+                n += 1
+        assert n > 100
+
+    def test_rotated_and_custom_pad_bbox(self):
+        from studioforge.kicad_mod import parse_footprint
+        fp = parse_footprint('''(footprint "X"
+          (pad "1" smd rect (at 1 2 90) (size 2 1) (layers "F.Cu" "F.Mask"))
+          (pad "2" smd custom (at 5 0) (size 1 1) (layers "F.Cu" "F.Mask")
+            (primitives (gr_poly (pts (xy 0 0) (xy 3 0) (xy 3 1) (xy 0 1)) (width 0) (fill yes))))
+          (pad "3" smd roundrect (at 0 0 45) (size 2 2) (layers "F.Cu") (roundrect_rratio 0.1)))''')
+        p1, p2, p3 = fp.pads
+        assert (p1.w, p1.h) == (1, 2)
+        assert p2.w == pytest.approx(3.5) and p2.x == pytest.approx(6.25)
+        assert p3.w == pytest.approx(2 * 2 ** 0.5) and p3.rratio == pytest.approx(0.1)
 
 
 def test_compare_flags_drill_differences():

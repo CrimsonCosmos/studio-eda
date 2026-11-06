@@ -24,7 +24,7 @@ SCHEMA = """{
   "category": "dotted category, e.g. ic.regulator.buck | mosfet | ic.mcu | connector.header | ic.interface.can | sensor.imu",
   "package": "package name as in the datasheet",
   "pins": [{"number": "1", "name": "VIN", "type": "power_in|power_out|input|output|bidir|passive|nc|open_collector|tristate", "alt": ["optional alternate functions"]}],
-  "footprint": "a name known to the generator list (e.g. SOIC-8, SOT-23-6, LQFP-48, QFN-32-5x5-EP3.1, TO-220-3, D_SMA) OR an object {\\"name\\":..., \\"pads\\":[{\\"number\\":\\"1\\",\\"x\\":-2.475,\\"y\\":-1.905,\\"w\\":1.95,\\"h\\":0.6,\\"shape\\":\\"rect|oval|roundrect|circle\\",\\"drill\\":0}], \\"courtyard\\":[xmin,ymin,xmax,ymax], \\"height\\":1.5} taken from the datasheet land-pattern drawing (mm, y down, pin 1 first)",
+  "footprint": "a KiCad library footprint Library:Name (e.g. Package_SO:SOIC-8_3.9x4.9mm_P1.27mm) or a name known to the generator list (e.g. SOIC-8, SOT-23-6, LQFP-48, QFN-32-5x5-EP3.1, TO-220-3, D_SMA) OR an object {\\"name\\":..., \\"pads\\":[{\\"number\\":\\"1\\",\\"x\\":-2.475,\\"y\\":-1.905,\\"w\\":1.95,\\"h\\":0.6,\\"shape\\":\\"rect|oval|roundrect|circle\\",\\"drill\\":0}], \\"courtyard\\":[xmin,ymin,xmax,ymax], \\"height\\":1.5} taken from the datasheet land-pattern drawing (mm, y down, pin 1 first)",
   "params": {"numeric electrical limits with these exact key names (SI units: V, A, Hz, ohm): vin_min, vin_max, vout_min, vout_max, iout_max, vref, fsw (Hz), vds_max, id_max, rds_on, vcc_min, vcc_max; for switching regulators ALSO: sync (true only if the low-side switch is integrated; false if an external catch diode is required), needs_catch_diode (bool), en_max (max EN pin voltage), cout_min_uf/cout_max_uf if the datasheet restricts output capacitance, and any datasheet table of recommended inductor/feedback values"},
   "datasheet_url": "official manufacturer URL of the datasheet PDF",
   "datasheet_file": "relative path of the PDF you saved (datasheet.pdf)",
@@ -111,6 +111,10 @@ def ingest_record(lib, rec: dict, scratch: Path, where: dict | None = None) -> P
     # footprint
     fpspec = rec["footprint"]
     fp = None
+    from ..footprints import footprint_for_package      # real KiCad footprint for the named package beats LLM-supplied geometry
+    _k = footprint_for_package(fpspec if isinstance(fpspec, str) else str(rec["package"]), len(pins), {p.number for p in pins if p.etype != "nc"})
+    if _k is not None and _k.lib_id:
+        rec["footprint"] = fpspec = _k.lib_id
     if isinstance(fpspec, str):
         try:
             fp = resolve_footprint(fpspec)
@@ -185,7 +189,7 @@ def ingest_record(lib, rec: dict, scratch: Path, where: dict | None = None) -> P
         offers = search_offers(mpn, None)
         notes += " [no direct offers found; search links only]"
     part = PartDef(mpn, str(rec.get("manufacturer", "")), str(rec.get("description", "")), str(rec["category"]),
-                   str(rec["package"]), pins, fp.name, dict(rec.get("params") or {}), "", rec.get("emi", "neutral"),
+                   str(rec["package"]), pins, fpspec if isinstance(fpspec, str) else fp.name, dict(rec.get("params") or {}), "", rec.get("emi", "neutral"),
                    rec.get("heat", "cool"), float(rec.get("height") or fp.height), str(rec.get("datasheet_url", "")),
                    doc_rel, offers, list(rec.get("alternates") or []), ["researched"], "researched", verified, notes.strip())
     if rec.get("product_page_url"):
