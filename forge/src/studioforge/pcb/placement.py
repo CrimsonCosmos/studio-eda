@@ -66,7 +66,9 @@ class _Placer:
         self.padoff = []                     # padoff[i][rot] = {padnumber: (dx,dy)}
         for comp in comps:
             fp = comp.footprint
-            cm = self.o.courtyard_margin / 2
+            npads = len(fp.pads)
+            # breakout room: fine-pitch / many-pin parts need escape channels around them
+            cm = self.o.courtyard_margin / 2 + (1.0 if npads >= 20 else 0.35 if npads >= 6 else 0.0)
             per_c, per_p = {}, {}
             for rt in ROTS:
                 x0, y0, x1, y1 = fp.oriented_courtyard(rt)

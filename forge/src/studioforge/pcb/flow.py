@@ -25,7 +25,7 @@ class BoardSpec:
     pitch: float | None = None
     copper_oz: float = 1.0
     max_layers: int = 6
-    utilizations: tuple = (0.5, 0.4, 0.3, 0.22)
+    utilizations: tuple = (0.42, 0.32, 0.24)
     time_budget_s: float = 900.0
     rule_overrides: dict = field(default_factory=dict)
 
@@ -62,10 +62,9 @@ def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> B
     layer_options = list(dict.fromkeys(layer_options))
     best: BuildResult | None = None
     utils = (spec.utilizations if not (spec.width and spec.height) else (1.0,))
-    plane_variants = [True, False]
     for layers in layer_options:
-      for pwr_plane in (plane_variants if layers == 4 else [True]):
-        for util in utils:
+      for util, pwr_plane in [(u, v) for u in utils for v in ((True, False) if layers == 4 else (True,))]:
+        if True:
             if time.time() - t_start > spec.time_budget_s:
                 say("time budget exhausted")
                 break

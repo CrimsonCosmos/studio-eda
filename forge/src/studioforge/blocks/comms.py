@@ -39,7 +39,7 @@ def can_node(lib: PartsLibrary, terminated=True, vcc=3.3, bitrate=1e6) -> Circui
         c.connect("CANL", f"{jp.ref}.2")
         c.constrain(Cluster([u.ref, r.ref, jp.ref], 1.0, 12.0))
     c.add_port("logic", "TXD", "can_logic", "bidir", voltage=vcc, signals={"tx": "TXD", "rx": "RXD"}, role="device")
-    c.add_port("bus", "CANH", "can_bus", "bidir", voltage=0.0, signals={"canh": "CANH", "canl": "CANL"}, role="peer")
+    c.add_port("bus", "CANH", "can_bus", "bidir", voltage=0.0, signals={"canh": "CANH", "canl": "CANL"}, role="peer", needs_connector=True)
     c.add_port("vcc", "VCC", "power", "in", voltage=vcc, current_a=0.05, vmin=3.0, vmax=3.6)
     c.add_port("gnd", "GND", "ground", "bidir")
     c.calcs["can"] = f"{part.mpn}: {bitrate / 1e3:.0f} kbit/s, Rs->GND (fast slope), termination {'jumper-selectable 120R' if terminated else 'none'}"

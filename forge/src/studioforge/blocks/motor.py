@@ -150,7 +150,7 @@ def motor_driver_3ph(lib: PartsLibrary, vbus_max=54.6, vbus_nom=48.0, phase_curr
     c.add_port("enable", "SD", "gpio", "in", voltage=vlogic, signals={"io": "SD"}, role="device")
     c.add_port("sense", "SENSE_A", "analog", "out", voltage=vlogic, signals={"a": "SENSE_A", "b": "SENSE_B", "c": "SENSE_C"},
                role="device", bias=vlogic / 2, gain=sense_gain, rshunt=rs)
-    c.add_port("phase", "PH_A", "motor_phase", "out", voltage=vbus_nom, current_a=I, signals={"a": "PH_A", "b": "PH_B", "c": "PH_C"}, terminal=tb.ref)
+    c.add_port("phase", "PH_A", "motor_phase", "out", voltage=vbus_nom, current_a=I, signals={"a": "PH_A", "b": "PH_B", "c": "PH_C"}, terminal=tb.ref, external=True)
     c.calcs["motor_driver"] = (f"{fet.mpn} x6, {drv.mpn} x3; Rds(on) {rds * 1e3:.1f} mOhm: conduction {p_cond:.2f} W + switching {p_sw:.2f} W "
                                f"= {p_fet:.2f} W per FET at {I:g} A rms / {vbus_nom:g} V / {pwm_hz / 1e3:.0f} kHz (tsw {tsw * 1e9:.0f} ns); "
                                f"Cbootstrap {fmt_si(cbs, 'F')} (need >= {fmt_si(cbs_req, 'F')}); Rg {rg:g} ohm; shunt {shunt_mohm:g} mOhm, gain {sense_gain:g}: "

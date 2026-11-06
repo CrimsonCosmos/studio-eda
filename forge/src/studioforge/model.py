@@ -345,7 +345,16 @@ class Circuit:
             self.nets[new] = members
         if old in self.net_attrs:
             a = self.net_attrs.pop(old)
-            self.net_attrs.setdefault(new, a)
+            cur = self.net_attrs.get(new)
+            if cur is None:
+                self.net_attrs[new] = a
+            else:                                   # joining nets: keep the demanding attributes
+                cur.current_a = max(cur.current_a, a.current_a)
+                cur.noisy |= a.noisy
+                cur.sensitive |= a.sensitive
+                cur.voltage = max(cur.voltage, a.voltage)
+                if a.role != "signal":
+                    cur.role = a.role
         for p in self.ports.values():
             if p.net == old:
                 p.net = new
@@ -377,7 +386,7 @@ class Circuit:
         def map_net(n: str) -> str:
             if n in net_map:
                 return net_map[n]
-            if n in GLOBAL_NETS or n.startswith("/"):
+            if n in GLOBAL_NETS or n.startswith("/") or n.startswith("+"):
                 return n
             return f"{prefix}{n}" if prefix else n
 

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "studioforge": {
+      "command": "python3",
+      "args": ["-m", "studioforge.mcp_server"],
+      "env": { "PYTHONPATH": "src" }
+    }
+  }
+}

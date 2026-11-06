@@ -176,7 +176,8 @@ def mcu_stm32f103(lib: PartsLibrary, requests=None, status_led=True, vdd=3.3) ->
     c.connect("SWCLK", f"{swd.ref}.3", pin("37"))
     c.connect("NRST", f"{swd.ref}.4")
     c.connect("GND", f"{swd.ref}.5")
-    c.constrain(Edge(swd.ref, "any", 2.0))
+    c.constrain(Cluster([u.ref, swd.ref], 1.5, 28.0))
+    c.constrain(Cluster([u.ref, rc.ref], 3.0, 6.0))
     if status_led:
         led = c.add(lib.led("green", "0603"), prefix="D", block="mcu")
         rl = c.add(lib.resistor(1e3, "0402"), prefix="R", block="mcu")

@@ -14,7 +14,7 @@ from .util import e12, e24, e96, infer_roles, std_inductor
        "Battery/DC input stage: power connector, TVS surge clamp, bulk capacitance, fuse (<=10 A) - exposes the raw bus rail.",
        [Param("vbat_nom", "number", 48.0, "nominal pack voltage (V)"), Param("vbat_max", "number", 54.6, "max voltage incl. full charge (V)"),
         Param("vbat_min", "number", 39.0, "min voltage at cutoff (V)"), Param("ibat_max", "number", 10.0, "max continuous bus current (A)"),
-        Param("rail", "string", "VBAT", "net name of the output rail")], "power")
+        Param("rail", "string", "VBAT", "net name of the output rail")], "power", auto=("ibat_max", "vbat_nom", "vbat_max", "vbat_min"))
 def battery_input(lib: PartsLibrary, vbat_nom=48.0, vbat_max=54.6, vbat_min=39.0, ibat_max=10.0, rail="VBAT") -> Circuit:
     c = Circuit("battery_input")
     c.set_net("GND", role="ground")
@@ -61,8 +61,9 @@ def battery_input(lib: PartsLibrary, vbat_nom=48.0, vbat_max=54.6, vbat_min=39.0
     c.constrain(Edge(conn.ref, "any", 4.0))
     c.constrain(Cluster([conn.ref, t.ref] + refs, 1.0, 25.0))
     c.add_port("vbus", bus, "power", "out", voltage=vbat_nom, current_a=ibat_max, vmin=vbat_min, vmax=vbat_max, source="battery")
+    c.add_port("src", "RAW", "power", "in", voltage=vbat_nom, current_a=ibat_max, vmin=vbat_min, vmax=vbat_max, external=True, connector=conn.part.mpn)
     c.add_port("gnd", "GND", "ground", "bidir")
-    c.calcs["battery_input"] = f"{vbat_min:g}-{vbat_max:g} V, {ibat_max:g} A; TVS {tvs.mpn}; bulk {n_bulk}x{lib.electrolytic(470e-6, cap_v).value}/{cap_v}V"
+    c.calcs["battery_input"] = f"{vbat_min:g}-{vbat_max:g} V, {ibat_max:g} A; TVS {tvs.mpn}; bulk {n_bulk}x{refs and c.components[refs[0]].value}/{cap_v}V"
     return c
 
 

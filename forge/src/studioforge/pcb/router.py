@@ -55,9 +55,11 @@ class RouteOptions:
     soft_penalty: float = 25.0
     max_ripups: int = 6
     max_expansions: int = 400_000
-    time_limit_s: float = 600.0
+    time_limit_s: float = 240.0
     width_classes: tuple = (0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 4.0)
     plane_stub: bool = True
+    verbose: bool = False
+    per_net_time_s: float = 45.0
 
 
 @dataclass
@@ -122,8 +124,8 @@ class GridRouter:
     def _setup(self) -> None:
         b, r = self.b, self.b.rules
         circ = b.circuit
-        base = max(r.track, self.o.width_classes[0])
-        base = self._snap_w(base)
+        self.o.width_classes = tuple(sorted({round(r.track, 3)} | {w for w in self.o.width_classes if w > r.track + 1e-9}))
+        base = round(r.track, 3)
         pads = b.pads()
         by_net: dict[str, list[PlacedPad]] = {}
         for p in pads:
@@ -447,7 +449,7 @@ class GridRouter:
                 path.reverse()
                 return path
             expansions += 1
-            if expansions > o.max_expansions or (expansions & 0xFFF == 0 and time.time() > self.deadline):
+            if expansions > o.max_expansions or (expansions & 0xFFF == 0 and (time.time() > self.deadline or time.time() > getattr(self, "_net_deadline", 1e18))):
                 self.stats["expansions"] += expansions
                 return None
             fxm, rtm = fx[li], rt[li]
@@ -712,12 +714,20 @@ class GridRouter:
             if time.time() > self.deadline:
                 self.failed.append(name)
                 continue
+            t_net = time.time()
+            self._net_deadline = t_net + self.o.per_net_time_s
             ok = self._route_net(net, True, queue, ripcount)
+            if self.o.verbose:
+                print(f"   route {name:<14} pads={len(net.pads):<3} ok={ok} {time.time() - t_net:6.1f}s exp={self.stats['expansions']}", flush=True)
             if not ok:
                 self.failed.append(name)
                 self.routed.pop(name, None)
         # final pass: retry what failed with a much larger search budget and rip-up
         retry = [n for n in dict.fromkeys(self.failed) if n in self.nets and not self.nets[n].plane and not self._net_done(n)]
+        if len(retry) > max(3, int(0.06 * len(self.nets))):
+            if self.o.verbose:
+                print(f"   {len(retry)} nets failed: skipping the long retry pass (layout too dense; flow will relax it)", flush=True)
+            retry = []
         if retry:
             old = self.o.max_expansions
             self.o.max_expansions = old * 5
@@ -730,6 +740,7 @@ class GridRouter:
                 nm = q2.pop(0)
                 if self._net_done(nm):
                     continue
+                self._net_deadline = time.time() + self.o.per_net_time_s * 2
                 if not self._route_net(self.nets[nm], True, q2, ripc):
                     self.failed.append(nm)
                     self.routed.pop(nm, None)
