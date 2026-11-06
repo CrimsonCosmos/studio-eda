@@ -14,7 +14,7 @@ from ..model import PartDef, Footprint
 from . import generic, seed
 from .docs import safe_name
 
-SEED_VERSION = 4
+SEED_VERSION = 7
 _OPS: dict[str, Callable[[Any, Any], bool]] = {">=": operator.ge, "<=": operator.le, "==": operator.eq,
                                               ">": operator.gt, "<": operator.lt, "!=": operator.ne}
 

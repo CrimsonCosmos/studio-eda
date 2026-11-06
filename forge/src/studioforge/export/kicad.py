@@ -98,6 +98,8 @@ def to_kicad_pcb(board: Board, title: str = "studioforge") -> str:
             continue
         k += 1
         outline = board.outline.buffer(-board.rules.edge_clearance)
+        if z.kind == "power":                      # pre-shaped pour: its own outline, not the whole layer
+            outline = z.polygons[0]
         zl = ["zone", ["net", nets[z.net]], ["net_name", Q(z.net)], ["layer", Q(z.layer)], ["uuid", _uuid(f"z{k}")],
               ["hatch", "edge", 0.5], ["connect_pads", ["clearance", board.rules.clearance]], ["min_thickness", 0.2],
               ["filled_areas_thickness", "no"],

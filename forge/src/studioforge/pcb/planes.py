@@ -33,7 +33,7 @@ def _power_net(board: Board, exclude: set[str]) -> str | None:
     return best
 
 
-def assign_planes(board: Board, outer_pour: bool = True) -> None:
+def assign_planes(board: Board, outer_pour: bool = True, power_plane: bool = True) -> None:
     n = len(board.layers)
     gnd = _ground_net(board)
     board.plane_nets.clear()
@@ -45,7 +45,7 @@ def assign_planes(board: Board, outer_pour: bool = True) -> None:
         board.pour_nets[gnd] = list(board.layers)
         return
     board.plane_nets[board.layers[1]] = gnd
-    pwr = _power_net(board, {gnd})
+    pwr = _power_net(board, {gnd}) if power_plane else None
     if pwr:
         board.plane_nets[board.layers[-2] if n > 4 else board.layers[2]] = pwr
     if outer_pour:
@@ -90,6 +90,10 @@ def fill_zones(board: Board, min_neck: float = 0.08) -> None:
             if ikind == "pad" and not obj.thru and layer != "F.Cu":
                 continue
             obstacles.append(geom.buffer(clr + 0.01, 16))
+        for pz in board.power_pours:
+            if pz.layer == layer and pz.net != net:
+                for g in pz.polygons:
+                    obstacles.append(g.buffer(clr + 0.01, 16))
         # unplated holes
         for p in board.pads():
             if p.thru and not p.plated:
@@ -115,6 +119,7 @@ def fill_zones(board: Board, min_neck: float = 0.08) -> None:
             if kind == "plane" or (anchors is not None and g.intersects(anchors)):
                 kept.append(g)
         board.zones.append(Zone(layer, net, kind, 0, kept))
+    board.zones.extend(board.power_pours)
 
 
 def add_stitching(board: Board, spacing: float = 6.0) -> int:
@@ -133,8 +138,10 @@ def add_stitching(board: Board, spacing: float = 6.0) -> int:
         others = []
         for layer in board.layers:
             for (inet, geom, ikind, obj) in _layer_items(board, layer):
-                if inet != net:
-                    others.append(geom)
+                if inet != net or ikind in ("pad", "via"):        # never drop a via into any pad/hole, even our own net
+                    others.append(geom.buffer(r.hole_to_hole * 0.6) if ikind in ("pad", "via") else geom)
+        for pz in board.power_pours:
+            others.extend(pz.polygons)
         occupied = unary_union(others).buffer(r.clearance + r.via_dia / 2 + 0.08) if others else None
         x = spacing / 2
         while x < board.width:

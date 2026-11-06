@@ -19,11 +19,28 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+import shapely
 from shapely.geometry import LineString, Point
 from shapely.ops import unary_union
 
 from .board import Board, PlacedPad, Track, Via
 from .rules import trace_width_for_current
+
+def _inside_pad(p, x: float, y: float, margin: float = 0.0) -> bool:
+    """True if (x, y) lies on the pad's real copper (rounded corners respected), eroded by `margin`."""
+    dx, dy = abs(x - p.x), abs(y - p.y)
+    hw, hh = p.w / 2 - margin, p.h / 2 - margin
+    if hw < 0 or hh < 0:
+        return dx <= p.w / 2 and dy <= p.h / 2
+    if p.shape == "circle":
+        return math.hypot(dx, dy) <= max(p.w, p.h) / 2 - margin
+    if p.shape in ("oval", "roundrect"):
+        rr = (min(p.w, p.h) / 2 if p.shape == "oval" else 0.25 * min(p.w, p.h)) - margin
+        rr = max(rr, 0.0)
+        ex, ey = max(dx - (hw - rr), 0.0), max(dy - (hh - rr), 0.0)
+        return math.hypot(ex, ey) <= rr + 1e-9 and dx <= hw + 1e-9 and dy <= hh + 1e-9
+    return dx <= hw + 1e-9 and dy <= hh + 1e-9
+
 
 DIRS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]   # index = heading
 SQ2 = math.sqrt(2.0)
@@ -54,6 +71,7 @@ class _Net:
 
 @dataclass
 class _Routed:
+    pour: bool = False
     segs: list = field(default_factory=list)     # (li, x1, y1, x2, y2, width)
     vias: list = field(default_factory=list)     # (x, y)
     cells: set = field(default_factory=set)      # (li, idx) nodes of the tree
@@ -127,7 +145,9 @@ class GridRouter:
                 elif a.current_a > 0:
                     target = self._snap_w(max(base, trace_width_for_current(a.current_a, r.temp_rise_c, r.copper_oz_outer)))
             ladder = [target]
-            if target > base:
+            if any(z.net == name for z in b.power_pours):
+                ladder = [base]                    # pour carries the current; remaining pads are small attachments
+            elif target > base:
                 mid = self._snap_w(target / 2)
                 if mid > base:
                     ladder.append(mid)
@@ -219,6 +239,16 @@ class GridRouter:
                 arr = self.fixed[k][li]
                 n = int(math.ceil(rad / self.g))
                 arr[: 1 + n, :] = -1; arr[-(1 + n):, :] = -1; arr[:, : 1 + n] = -1; arr[:, -(1 + n):] = -1
+        # pre-routed power pours: fixed copper owned by their net
+        for z in b.power_pours:
+            if z.layer not in self.layers or z.net not in self.netid:
+                continue
+            li = self.layers.index(z.layer)
+            nid = self.netid[z.net]
+            for poly in z.polygons:
+                for k in range(self.nK):
+                    rad = self.clr + self._wk(k) / 2 + self.margin
+                    self._stamp_poly(self.fixed[k][li], poly, rad, nid)
         # keepouts
         for (x0, y0, x1, y1) in b.keepouts:
             win = self._window(x0, y0, x1, y1)
@@ -228,6 +258,41 @@ class GridRouter:
                 for k in range(self.nK):
                     for li in range(self.nl):
                         self._apply(self.fixed[k][li], win, m, -1)
+
+    def _stamp_poly(self, arr, poly, r_extra: float, nid: int) -> None:
+        minx, miny, maxx, maxy = poly.bounds
+        win = self._window(minx - r_extra, miny - r_extra, maxx + r_extra, maxy + r_extra)
+        if win is None:
+            return
+        _, _, _, _, X, Y = win
+        mask = shapely.contains_xy(poly.buffer(r_extra, 6), X, Y)
+        self._apply(arr, win, mask, nid)
+        iy0, iy1, ix0, ix1, _, _ = win
+        # no vias inside pours' own foot-print? vias in a pour are fine; nothing to do
+        return
+
+    def _pour_sources(self, z, net: _Net, k: int) -> list[tuple[int, int]]:
+        li = self.layers.index(z.layer)
+        out = []
+        fxm, rtm = self.fx[k][li], self.rt[k][li]
+        for poly in z.polygons:
+            minx, miny, maxx, maxy = poly.bounds
+            win = self._window(minx, miny, maxx, maxy)
+            if win is None:
+                continue
+            iy0, iy1, ix0, ix1, X, Y = win
+            inside = shapely.contains_xy(poly, X, Y)
+            er = inside.copy()
+            er[1:, :] &= inside[:-1, :]; er[:-1, :] &= inside[1:, :]; er[:, 1:] &= inside[:, :-1]; er[:, :-1] &= inside[:, 1:]
+            er[0, :] = False; er[-1, :] = False; er[:, 0] = False; er[:, -1] = False
+            front = inside & ~er
+            ys, xs = np.nonzero(front)
+            for yy, xx in zip(ys, xs):
+                idx = (iy0 + int(yy)) * self.sx + (ix0 + int(xx))
+                f, r_ = fxm[idx], rtm[idx]
+                if (f == 0 or f == net.nid) and (r_ == 0 or r_ == net.nid):
+                    out.append((li, idx))
+        return out
 
     def _stamp_pad_nozone(self, p: PlacedPad) -> None:
         rad = self.via_r + 0.12
@@ -268,10 +333,10 @@ class GridRouter:
             for li in range(self.nl):
                 self._apply(self.route[k][li], win, m, nid)
         # also keep other vias from stacking
-        win = self._window(x - 1, y - 1, x + 1, y + 1)
+        win = self._window(x - 1.2, y - 1.2, x + 1.2, y + 1.2)
         if win:
             iy0, iy1, ix0, ix1, X, Y = win
-            self.noviazone[iy0:iy1, ix0:ix1][np.hypot(X - x, Y - y) <= self.via_r * 2 + self.clr * 0.5] = 1
+            self.noviazone[iy0:iy1, ix0:ix1][np.hypot(X - x, Y - y) <= max(self.via_r * 2 + self.clr * 0.5, self.b.rules.via_drill + self.b.rules.hole_to_hole + 0.06)] = 1
 
     def _rebuild_route(self) -> None:
         for k in range(self.nK):
@@ -300,7 +365,7 @@ class GridRouter:
             for iy in range(iy0, iy1 + 1):
                 for ix in range(ix0, ix1 + 1):
                     x, y = (ix - 1) * g, (iy - 1) * g
-                    if abs(x - p.x) > p.w / 2 + 1e-9 or abs(y - p.y) > p.h / 2 + 1e-9:
+                    if not _inside_pad(p, x, y, 0.04):
                         continue
                     idx = iy * self.sx + ix
                     f, r_ = fxm[idx], rtm[idx]
@@ -519,11 +584,28 @@ class GridRouter:
 
     def _try_width(self, net, pads, order, width, k, allow_rip, queue, ripcount) -> bool:
         tree_cells: list[tuple[int, int]] = []
-        first_terms = self._terminals(pads[order[0]], net, k)
-        if not first_terms:
-            return False
-        tree_cells.extend(first_terms)
-        self.routed.setdefault(net.name, _Routed(width=width))
+        pours = [z for z in self.b.power_pours if z.net == net.name and z.layer in self.layers]
+        if pours:
+            # attach to the MAIN piece only (most power pads, then area); other pieces are just copper
+            allp = [(g, z) for z in pours for g in z.polygons]
+            main_g, main_z = max(allp, key=lambda gz: (sum(1 for p in pads if p.geom().intersects(gz[0])), gz[0].area))
+            from shapely.ops import unary_union as _uu
+            src = self._pour_sources(type(main_z)(main_z.layer, main_z.net, main_z.kind, main_z.priority, [main_g]), net, k)
+            pg = main_g.buffer(0.01)
+            rest = [i for i in order if not pads[i].geom().intersects(pg)]
+            self.routed.setdefault(net.name, _Routed(pour=True, width=width))
+            if not rest:
+                return True
+            if not src:
+                return False
+            tree_cells.extend(src)
+            order = [-1] + rest
+        else:
+            first_terms = self._terminals(pads[order[0]], net, k)
+            if not first_terms:
+                return False
+            tree_cells.extend(first_terms)
+            self.routed.setdefault(net.name, _Routed(width=width))
         for j in order[1:]:
             targets = self._terminals(pads[j], net, k)
             if not targets:
@@ -547,7 +629,6 @@ class GridRouter:
                 return False
             self._commit(net, path, width)
             tree_cells.extend(path)
-            tree_cells.extend(targets[:1])
         return True
 
     def _victims(self, net: _Net, path, width: float) -> list[str]:
@@ -604,11 +685,12 @@ class GridRouter:
         self._setup()
         t0 = time.time()
         # 1) via stubs for plane nets
+        plane_fail: set[str] = set()
         for name, net in sorted(self.nets.items()):
             if net.plane:
                 for p in net.pads:
                     if not self._plane_stub(net, p):
-                        self.failed.append(name)
+                        plane_fail.add(name)
                         self.warnings.append(f"plane net {name}: no room for a via near {p.ref}.{p.number}")
         # 2) signal nets: wide/critical first, then short before long
         todo = [n for n in self.nets.values() if not n.plane and len(n.pads) >= 2]
@@ -616,7 +698,8 @@ class GridRouter:
         def hp(n: _Net) -> float:
             xs = [p.x for p in n.pads]; ys = [p.y for p in n.pads]
             return (max(xs) - min(xs)) + (max(ys) - min(ys))
-        todo.sort(key=lambda n: (-n.width_ladder[0], len(n.pads) > 2, hp(n)))
+        # wide first; then long multi-pin nets (few alternatives); then short local nets, shortest first
+        todo.sort(key=lambda n: (-n.width_ladder[0], not (len(n.pads) > 2 and hp(n) > 25), hp(n)))
         queue = [n.name for n in todo]
         ripcount: dict[str, int] = {}
         guard = 0
@@ -633,7 +716,25 @@ class GridRouter:
             if not ok:
                 self.failed.append(name)
                 self.routed.pop(name, None)
-        self.failed = sorted(set(self.failed) - {n for n in self.routed if self._net_done(n)})
+        # final pass: retry what failed with a much larger search budget and rip-up
+        retry = [n for n in dict.fromkeys(self.failed) if n in self.nets and not self.nets[n].plane and not self._net_done(n)]
+        if retry:
+            old = self.o.max_expansions
+            self.o.max_expansions = old * 5
+            self.failed = [f for f in self.failed if f not in retry]
+            q2 = list(retry)
+            ripc: dict[str, int] = {}
+            g2 = 0
+            while q2 and g2 < len(retry) * 6 and time.time() < self.deadline:
+                g2 += 1
+                nm = q2.pop(0)
+                if self._net_done(nm):
+                    continue
+                if not self._route_net(self.nets[nm], True, q2, ripc):
+                    self.failed.append(nm)
+                    self.routed.pop(nm, None)
+            self.o.max_expansions = old
+        self.failed = sorted((set(self.failed) - {n for n in self.routed if self._net_done(n)}) | plane_fail)
         self._write_board()
         b.stats.update({"route_time_s": round(time.time() - t0, 2), "grid_pitch": self.g, **self.stats,
                         "unrouted": list(self.failed)})
@@ -644,7 +745,7 @@ class GridRouter:
 
     def _net_done(self, name: str) -> bool:
         net = self.nets[name]
-        return name in self.routed and (len(net.pads) < 2 or bool(self.routed[name].segs))
+        return name in self.routed and (len(net.pads) < 2 or bool(self.routed[name].segs) or self.routed[name].pour)
 
     def _write_board(self) -> None:
         b = self.b

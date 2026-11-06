@@ -10,6 +10,7 @@ from .board import Board
 from .drc import DRCReport, run_drc
 from .placement import PlaceOptions, place
 from .planes import add_stitching, assign_planes, fill_zones
+from .pours import plan_power_pours
 from .router import RouteOptions, route
 from .rules import Rules, rules_for
 
@@ -61,7 +62,9 @@ def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> B
     layer_options = list(dict.fromkeys(layer_options))
     best: BuildResult | None = None
     utils = (spec.utilizations if not (spec.width and spec.height) else (1.0,))
+    plane_variants = [True, False]
     for layers in layer_options:
+      for pwr_plane in (plane_variants if layers == 4 else [True]):
         for util in utils:
             if time.time() - t_start > spec.time_budget_s:
                 say("time budget exhausted")
@@ -72,8 +75,10 @@ def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> B
             opt = PlaceOptions(width=spec.width, height=spec.height, utilization=util, seed=spec.seed,
                                fixed_outline=bool(spec.width and spec.height))
             board = place(circuit, rules, opt)
-            assign_planes(board)
-            say(f"{layers}L util={util}: board {board.width}x{board.height} mm; routing")
+            assign_planes(board, power_plane=pwr_plane)
+            pours = plan_power_pours(board)
+            say(f"{layers}L util={util}{'' if pwr_plane else ' (2nd inner layer = signal)'}: board {board.width}x{board.height} mm; "
+                f"pours {pours or 'none'}; routing")
             route(board, RouteOptions(pitch=spec.pitch))
             fill_zones(board)
             if add_stitching(board):

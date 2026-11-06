@@ -202,7 +202,7 @@ def radial_cap(d: float) -> Footprint:
 # ---- misc SMD ----------------------------------------------------------------------
 def diode_sm(kind: str) -> Footprint:
     dims = {"SMA": (2.0, 2.5, 1.8, 3.5, 1.75), "SMB": (2.15, 2.5, 2.3, 3.65, 2.25),
-            "SMC": (3.4, 3.3, 2.5, 5.0, 3.5)}
+            "SMC": (3.4, 2.5, 3.3, 4.9, 3.35)}
     x, w, h, chx, chy = dims[kind]
     return Footprint(f"D_{kind}", [Pad("1", -x, 0, w, h, "roundrect"), Pad("2", x, 0, w, h, "roundrect")],
                      (-chx, -chy, chx, chy), [("line", -x - w / 2 - 0.3, -h / 2, -x - w / 2 - 0.3, h / 2)], 2.4)

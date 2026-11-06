@@ -98,6 +98,7 @@ class Board:
         self.layers = layer_names(rules.layers)
         self.plane_nets: dict[str, str] = {}          # layer -> net (solid plane layers)
         self.pour_nets: dict[str, list[str]] = {}     # net -> layers carrying a copper pour (layers stay routable)
+        self.power_pours: list[Zone] = []             # high-current polygon pours (pre-routed copper)
         self.keepouts: list[tuple[float, float, float, float]] = []
         self.notes: list[str] = []
         self.warnings: list[str] = []

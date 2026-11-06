@@ -154,7 +154,7 @@ def run_drc(board: Board, check_connectivity: bool = True) -> DRCReport:
         nets_w[t.net] = min(nets_w.get(t.net, 99.0), t.width)
     for net, w in nets_w.items():
         need = board.net_current(net)
-        if need > 0 and net not in board.pour_nets and net not in board.plane_nets.values():
+        if need > 0 and net not in board.pour_nets and net not in board.plane_nets.values() and not any(z.net == net for z in board.power_pours):
             cap = current_for_width(w, r.temp_rise_c, r.copper_oz_outer)
             if cap < need * 0.98:
                 V.append(Violation("ampacity", f"net {net}: narrowest track {w:g} mm carries ~{cap:.1f} A (< {need:g} A) at {r.temp_rise_c:g} C rise", None, "warning"))
@@ -225,8 +225,10 @@ def _connectivity(board: Board, rep: DRCReport) -> None:
         if len(groups) > 1:
             bad += 1
             sizes = sorted((len(v) for v in groups.values()), reverse=True)
-            first = next(iter(groups.values()))[0]
-            rep.violations.append(Violation("unconnected", f"net {net}: {len(groups)} separate copper islands (pads per island {sizes})", (first.x, first.y)))
+            ordered = sorted(groups.values(), key=len, reverse=True)
+            stranded = [f"{p.ref}.{p.number}" for g in ordered[1:] for p in g]
+            first = ordered[1][0]
+            rep.violations.append(Violation("unconnected", f"net {net}: {len(groups)} separate copper islands (pads per island {sizes}); stranded: {stranded[:6]}", (first.x, first.y)))
     rep.stats["nets_checked"] = len(nets)
     rep.stats["nets_disconnected"] = bad
 

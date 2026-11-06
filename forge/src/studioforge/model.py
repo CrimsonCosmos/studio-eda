@@ -245,13 +245,16 @@ class NetAttr:
 
 @dataclass
 class Port:
+    """An interface of a block/board. Single-net ports use `net`; bus-like ports carry `signals`
+    (canonical signal name -> net name), e.g. a CAN logic port {"tx": "CAN_TX", "rx": "CAN_RX"}."""
     name: str
     net: str
-    kind: str                       # power | ground | can | uart | i2c | spi | pwm | analog | gpio ...
+    kind: str                       # power | can_logic | can_bus | uart | i2c | spi | pwm | analog | gpio | motor_phase ...
     direction: str = "bidir"        # in | out | bidir
     voltage: float = 0.0
     current_a: float = 0.0
     meta: dict[str, Any] = field(default_factory=dict)
+    signals: dict[str, str] = field(default_factory=dict)
 
 
 class Circuit:
@@ -314,8 +317,8 @@ class Circuit:
         return a
 
     def add_port(self, name: str, net: str, kind: str, direction: str = "bidir",
-                 voltage: float = 0.0, current_a: float = 0.0, **meta) -> Port:
-        p = Port(name, net, kind, direction, voltage, current_a, meta)
+                 voltage: float = 0.0, current_a: float = 0.0, signals: dict[str, str] | None = None, **meta) -> Port:
+        p = Port(name, net, kind, direction, voltage, current_a, meta, dict(signals or {}))
         self.ports[name] = p
         return p
 
@@ -346,6 +349,9 @@ class Circuit:
         for p in self.ports.values():
             if p.net == old:
                 p.net = new
+            for k, v in list(p.signals.items()):
+                if v == old:
+                    p.signals[k] = new
         for c in self.constraints:
             if hasattr(c, "rename_net"):
                 c.rename_net(old, new)
@@ -404,6 +410,8 @@ class Circuit:
         for pname, p in other.ports.items():
             q = copy.copy(p)
             q.net = netmap_full.get(p.net, p.net)
+            q.signals = {k: netmap_full.get(v, v) for k, v in p.signals.items()}
+            q.meta = dict(p.meta)
             self.ports[f"{prefix}{pname}" if prefix else pname] = q
         self.notes.extend(other.notes)
         self.warnings.extend(other.warnings)

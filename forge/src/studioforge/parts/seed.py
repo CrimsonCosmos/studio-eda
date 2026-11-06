@@ -54,13 +54,16 @@ def seed_parts() -> list[PartDef]:
     out.append(_part("TPS563201DDCR", "Texas Instruments", "17V 3A synchronous buck converter, Eco-mode, SOT-23-6", "ic.regulator.buck",
                      "SOT-23-6", [_p(1, "GND", PI), _p(2, "SW", PO), _p(3, "VIN", PI), _p(4, "VFB", IN), _p(5, "EN", IN), _p(6, "VBST", PA)],
                      "SOT-23-6", {"vin_min": 4.5, "vin_max": 17.0, "iout_max": 3.0, "vref": 0.768, "fsw": 580e3, "topology": "buck",
-                                  "vout_min": 0.76, "vout_max": 7.0, "rds_on_sum": 0.108},
+                                  "vout_min": 0.76, "vout_max": 7.0, "rds_on_sum": 0.108, "sync": True, "en_max": 17.0, "cout_min_uf": 20, "cout_max_uf": 68,
+                                  "recommended": {"1.8": {"l_min_uh": 1.5, "l_max_uh": 4.7}, "2.5": {"l_min_uh": 2.2, "l_max_uh": 4.7}, "3.3": {"l_min_uh": 2.2, "l_max_uh": 4.7},
+                                                  "5": {"l_min_uh": 3.3, "l_max_uh": 4.7}, "6.5": {"l_min_uh": 3.3, "l_max_uh": 4.7}}},
                      0.62, "https://www.ti.com/lit/ds/symlink/tps563201.pdf", "aggressor", "warm", 1.1, aliases=["TPS563201"], tags=["power", "buck"]))
     out.append(_part("TPS54360BDDAR", "Texas Instruments", "60V 3.5A step-down converter with Eco-mode, SO-PowerPAD-8", "ic.regulator.buck",
                      "SOIC-8-EP", [_p(1, "BOOT", PA), _p(2, "VIN", PI), _p(3, "EN", IN), _p(4, "RT/CLK", IN), _p(5, "FB", IN), _p(6, "COMP", PA),
                                    _p(7, "GND", PI), _p(8, "SW", PO), _p(9, "PAD", PI)],
                      "SOIC-8-EP", {"vin_min": 4.5, "vin_max": 60.0, "iout_max": 3.5, "vref": 0.8, "fsw": 500e3, "topology": "buck",
-                                   "vout_min": 0.8, "vout_max": 58.0, "rds_on_sum": 0.2},
+                                   "vout_min": 0.8, "vout_max": 58.0, "rds_on_sum": 0.2, "sync": False, "needs_catch_diode": True, "rds_on_hs": 0.092,
+                                   "gm_ea": 350e-6, "gm_ps": 12.0, "vref_en": 1.2, "rt_500k": 200e3, "qg_nc": 3.0, "trise_ns": 4.9, "boot_uf": 0.1},
                      2.95, "https://www.ti.com/lit/ds/symlink/tps54360b.pdf", "aggressor", "hot", 1.7, aliases=["TPS54360B"], tags=["power", "buck", "hv"]))
     out.append(_part("AMS1117-3.3", "Advanced Monolithic Systems", "1A 3.3V LDO regulator SOT-223", "ic.regulator.ldo", "SOT-223",
                      [_p(1, "GND", PI), _p(2, "VOUT", PO), _p(3, "VIN", PI)], "SOT-223",
@@ -77,7 +80,7 @@ def seed_parts() -> list[PartDef]:
                      1.85, "", "aggressor", "warm", 1.75, aliases=["IR2104S", "IR2104"], tags=["gate-driver", "motor"]))
     out.append(_part("IRFB4110PBF", "Infineon", "100V 180A N-MOSFET TO-220, Rds(on) 4.5mΩ", "mosfet", "TO-220-3",
                      [_p(1, "G", IN), _p(2, "D", PA), _p(3, "S", PA)], "TO-220-3",
-                     {"vds_max": 100.0, "id_max": 180.0, "rds_on": 0.0045, "qg_nc": 150.0, "vgs_th": 3.0, "channel": "n", "pd_max_w": 370.0},
+                     {"vds_max": 100.0, "id_max": 180.0, "rds_on": 0.0045, "qg_nc": 150.0, "qgd_nc": 43.0, "vgs_th": 3.0, "channel": "n", "pd_max_w": 370.0},
                      3.9, "", "aggressor", "hot", 4.5, aliases=["IRFB4110"], tags=["mosfet", "power", "motor"]))
     out.append(_part("IRLML6344TRPBF", "Infineon", "30V 5A logic-level N-MOSFET SOT-23", "mosfet", "SOT-23",
                      [_p(1, "G", IN), _p(2, "S", PA), _p(3, "D", PA)], "SOT-23",
@@ -89,6 +92,8 @@ def seed_parts() -> list[PartDef]:
                      [_p(1, "K"), _p(2, "A")], "D_SMA", {"vr": 600.0, "if": 1.0, "trr_ns": 35}, 0.12, "", tags=["diode"]))
     out.append(_part("SS34", "Generic", "40V 3A Schottky rectifier SMA/DO-214AC", "diode", "D_SMA",
                      [_p(1, "K"), _p(2, "A")], "D_SMA", {"vr": 40.0, "if": 3.0, "vf": 0.5}, 0.13, "", tags=["diode"]))
+    out.append(_part("B560C-13-F", "Diodes Inc.", "60V 5A Schottky rectifier SMC (buck catch diode)", "diode", "D_SMC",
+                     [_p(1, "K"), _p(2, "A")], "D_SMC", {"vr": 60.0, "if": 5.0, "vf": 0.7}, 0.55, "", heat="warm", tags=["diode", "schottky"]))
     out.append(_part("SMBJ58A", "Generic", "58V standoff unidirectional TVS 600W SMB", "tvs", "D_SMB",
                      [_p(1, "K"), _p(2, "A")], "D_SMB", {"vrwm": 58.0, "vbr": 64.4, "vclamp": 93.6, "ppk_w": 600}, 0.40, "", tags=["protection"]))
     out.append(_part("SN65HVD230DR", "Texas Instruments", "3.3V CAN transceiver SOIC-8 (1Mbps)", "ic.interface.can", "SOIC-8",
