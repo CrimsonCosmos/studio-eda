@@ -91,22 +91,31 @@ def to_kicad_pcb(board: Board, title: str = "studioforge") -> str:
     for a, b in zip(pts[:-1], pts[1:]):
         k += 1
         root.append(["gr_line", ["start", a[0], a[1]], ["end", b[0], b[1]], ["stroke", ["width", 0.1], ["type", "default"]], ["layer", Q("Edge.Cuts")], ["tstamp", _uuid(f"e{k}")]])
-    # zones (with our computed fill so the file opens identical; KiCad can refill with 'B')
+    # zones. KiCad refills through ZONE_FILLER (kicad_backend does that before DRC/plot), so the stored fill is
+    # only emitted when exact (no interior voids: a filled_polygon cannot carry holes and would paint copper over
+    # foreign pads/vias). Pre-shaped pours become one zone per island, each with its own outline (an outline of
+    # polygons[0] alone cut every other island out of the refill) and SOLID pad connection (thermal relief starves
+    # the spokes on narrow pours: KiCad DRC `starved_thermal`).
     for z in board.zones:
         if not z.polygons or z.net not in nets:
             continue
-        k += 1
-        outline = board.outline.buffer(-board.rules.edge_clearance)
-        if z.kind == "power":                      # pre-shaped pour: its own outline, not the whole layer
-            outline = z.polygons[0]
-        zl = ["zone", ["net", nets[z.net]], ["net_name", Q(z.net)], ["layer", Q(z.layer)], ["tstamp", _uuid(f"z{k}")],
-              ["hatch", "edge", 0.5], ["connect_pads", ["clearance", board.rules.clearance]], ["min_thickness", 0.2],
-              ["filled_areas_thickness", "no"],
-              ["fill", "yes", ["thermal_gap", board.rules.plane_thermal_gap], ["thermal_bridge_width", board.rules.plane_spoke]],
-              ["polygon", ["pts"] + [["xy", x, y] for x, y in outline.exterior.coords[:-1]]]]
-        for poly in z.polygons:
-            zl.append(["filled_polygon", ["layer", Q(z.layer)], ["pts"] + [["xy", x, y] for x, y in poly.exterior.coords[:-1]]])
-        root.append(zl)
+        pour = z.kind == "power"                   # pre-shaped pour: its own islands, not the whole layer
+        islands = list(z.polygons) if pour else [board.outline.buffer(-board.rules.edge_clearance)]
+        for outline in islands:
+            if outline.geom_type == "MultiPolygon":
+                outline = max(outline.geoms, key=lambda g: g.area)
+            k += 1
+            zl = ["zone", ["net", nets[z.net]], ["net_name", Q(z.net)], ["layer", Q(z.layer)], ["tstamp", _uuid(f"z{k}")],
+                  ["hatch", "edge", 0.5],
+                  ["connect_pads", "yes", ["clearance", board.rules.clearance]] if pour else ["connect_pads", ["clearance", board.rules.clearance]],
+                  ["min_thickness", max(0.127, board.rules.min_track)], ["filled_areas_thickness", "no"],
+                  ["fill", "yes", ["thermal_gap", board.rules.plane_thermal_gap], ["thermal_bridge_width", board.rules.plane_spoke]],
+                  ["polygon", ["pts"] + [["xy", x, y] for x, y in outline.exterior.coords[:-1]]]]
+            fills = [outline] if pour else list(z.polygons)
+            if all(not g.interiors and g.geom_type == "Polygon" for g in fills):
+                for g in fills:
+                    zl.append(["filled_polygon", ["layer", Q(z.layer)], ["pts"] + [["xy", x, y] for x, y in g.exterior.coords[:-1]]])
+            root.append(zl)
     return dump(root) + "\n"
 
 

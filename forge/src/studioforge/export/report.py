@@ -60,3 +60,20 @@ def render_report(res: BuildResult, project: str, extra: dict) -> str:
     for k, v in (extra or {}).items():
         L += ["", f"## {k}", "", str(v)]
     return "\n".join(L) + "\n"
+
+
+def kicad_drc_section(rep) -> str:
+    """Markdown body for the 'KiCad DRC (authoritative)' section (rep = kicad_backend.DrcReport)."""
+    L = [f"KiCad {rep.version or '?'} DRC (zones refilled by KiCad's own filler): **{'CLEAN' if rep.clean else 'VIOLATIONS'}** - {rep.summary()}.",
+         "Full machine-readable result: `kicad_drc.json`."]
+    if rep.by_type or rep.unconnected:
+        L += ["", "| Type | Severity | Count |", "|--|--|--|"]
+        counts: dict[tuple[str, str], int] = {}
+        for v in rep.violations + rep.unconnected:
+            counts[(v["type"], v["severity"])] = counts.get((v["type"], v["severity"]), 0) + 1
+        for (t, sev), n in sorted(counts.items(), key=lambda kv: (kv[0][1] != "error", -kv[1])):
+            L.append(f"| {t} | {sev} | {n} |")
+        for v in (rep.errors + rep.unconnected)[:15]:
+            it = v["items"][0] if v["items"] else {}
+            L.append(f"\n- {v['type']}: {v['description']} @ ({it.get('x', '?')}, {it.get('y', '?')}) {it.get('desc', '')}")
+    return "\n".join(L)
