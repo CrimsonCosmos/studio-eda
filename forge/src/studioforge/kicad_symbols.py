@@ -223,46 +223,73 @@ def symbol_pins(lib_id: str) -> list[dict]:
 
 
 # ---- part -> symbol -----------------------------------------------------------------------
-_CATEGORY = [("resistor", "Device:R"), ("capacitor.electrolytic", "Device:CP"), ("capacitor", "Device:C"), ("inductor", "Device:L"),
-             ("ferrite", "Device:FerriteBead"), ("led", "Device:LED"), ("fuse", "Device:Fuse"), ("crystal", "Device:Crystal_GND24"),
-             ("testpoint", "Connector:TestPoint")]
-
-
 def symbol_for_part(part, footprint_name: str = "") -> str | None:
     """Best KiCad symbol lib_id for a PartDef, or None (caller then draws a box symbol from the part's pins)."""
     if not symbols_available():
         return None
-    lid = _symbol_for_part(part)
-    return lid if lid and (not part.pins or compatible(part, lid)) else None
-
-
-def _symbol_for_part(part) -> str | None:
-    cat = part.category or ""
-    npins = len(part.pins)
-    for pre, lid in _CATEGORY:
-        if cat.startswith(pre) and info(lid):
-            if lid == "Device:Crystal_GND24" and npins != 4:
-                return "Device:Crystal" if info("Device:Crystal") else None
+    for lid in _candidates(part):
+        if info(lid) and (not part.pins or compatible(part, lid)):
             return lid
-    if cat.startswith("connector") and npins:
+    return None
+
+
+def _mpn_match(part) -> list[str]:
+    """Library symbols named like the MPN (KiCad uses a lower-case 'x' as package/temperature wildcard, e.g. STM32F103C8Tx)."""
+    out = []
+    for q in dict.fromkeys([part.mpn, *getattr(part, "aliases", ())]):
+        qn = re.sub(r"[^A-Za-z0-9]", "", q).upper()
+        if len(qn) < 4:
+            continue
+        for s in find_symbols(qn[:7], limit=200):
+            sn = re.sub(r"[^A-Za-z0-9]", "", s.name)
+            rx = "".join("." if ch == "x" else re.escape(ch.upper()) for ch in sn)
+            if len(sn) >= 4 and re.match(rx, qn):
+                out.append((-len(sn), s.lib_id))
+    return [lid for _, lid in sorted(out)]
+
+
+def _candidates(part) -> list[str]:
+    cat = part.category or ""
+    desc = f"{part.description} {part.mpn}".lower()
+    npins = len(part.pins)
+    c: list[str] = []
+    if cat.startswith("capacitor.electrolytic"):
+        c += ["Device:C_Polarized", "Device:CP"]
+    elif cat.startswith("resistor"):
+        c.append("Device:R")
+    elif cat.startswith("capacitor"):
+        c.append("Device:C")
+    elif cat.startswith("inductor"):
+        c.append("Device:L")
+    elif cat.startswith("ferrite"):
+        c.append("Device:FerriteBead")
+    elif cat == "led" or cat.startswith("led"):
+        c.append("Device:LED")
+    elif cat.startswith("fuse"):
+        c.append("Device:Fuse")
+    elif cat.startswith("crystal"):
+        c += ["Device:Crystal_GND24" if npins == 4 else "Device:Crystal"]
+    elif cat.startswith("testpoint"):
+        c.append("Connector:TestPoint")
+    elif cat.startswith("mounting"):
+        c.append("Mechanical:MountingHole")
+    elif cat.startswith("connector") and npins:
         m = re.search(r"(\d)x(\d+)", part.package or "")
         rows, cols = (int(m.group(1)), int(m.group(2))) if m else (1, npins)
-        if rows == 2 and rows * cols == npins and info(f"Connector_Generic:Conn_02x{cols:02d}_Odd_Even"):
-            return f"Connector_Generic:Conn_02x{cols:02d}_Odd_Even"
-        if info(f"Connector_Generic:Conn_01x{npins:02d}"):
-            return f"Connector_Generic:Conn_01x{npins:02d}"
-        return None
-    if cat.startswith("diode") or cat == "diode":
-        return "Device:D"
-    if cat.startswith("mounting"):
-        return "Mechanical:MountingHole" if info("Mechanical:MountingHole") else None
-    if cat.startswith("mosfet"):
-        return None                       # pin order differs per package; box symbol keeps our (verified) pin numbers
-    for q in (part.mpn, *getattr(part, "aliases", ())):
-        r = [s for s in find_symbols(q, limit=10) if _norm(s.name) == _norm(q) and s.pins == npins]
-        if r:
-            return r[0].lib_id
-    return None
+        if rows == 2 and rows * cols == npins:
+            c.append(f"Connector_Generic:Conn_02x{cols:02d}_Odd_Even")
+        c.append(f"Connector_Generic:Conn_01x{npins:02d}")
+    elif cat.startswith("mosfet"):
+        pol = "PMOS" if re.search(r"p-?channel|p-mos|pmos", desc) else "NMOS"
+        c += [f"Device:Q_{pol}_{o}" for o in ("GDS", "GSD", "DGS", "DSG", "SDG", "SGD")]
+    elif cat in ("tvs",) or "tvs" in cat:
+        c += ["Device:D_TVS", "Device:D"]
+    elif cat.startswith("diode"):
+        c += (["Device:D_Schottky"] if "schottky" in desc or part.mpn.upper().startswith(("SS", "B5", "SB")) else []) + \
+             (["Device:D_Zener"] if "zener" in desc else []) + ["Device:D"]
+    if not c or cat.startswith(("ic", "mcu", "regulator", "driver", "transceiver", "sensor", "amplifier", "opamp")):
+        c += _mpn_match(part)
+    return c
 
 
 def symbol_units(lib_id: str) -> int:

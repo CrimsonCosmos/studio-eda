@@ -62,7 +62,7 @@ def test_gerbers_and_drills_parse_and_match_model(built, tmp_path):
     from gerbonara.graphic_objects import Flash, Line
     res = built[4]
     b = res.board
-    write_package(res, tmp_path, "t")
+    write_package(res, tmp_path, "t", use_kicad=False)   # tests the built-in writer
     files = glob.glob(str(tmp_path / "gerber" / "*"))
     assert len(files) >= 10
     with warnings.catch_warnings():

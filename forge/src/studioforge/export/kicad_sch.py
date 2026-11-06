@@ -22,7 +22,7 @@ G = 1.27
 _PIN_TYPES = {"power_in": "power_in", "power_out": "power_out", "input": "input", "output": "output", "bidir": "bidirectional",
               "passive": "passive", "open_collector": "open_collector", "nc": "no_connect"}
 _FONT = ["effects", ["font", ["size", 1.27, 1.27]]]
-_HIDE = ["effects", ["font", ["size", 1.27, 1.27]], ["hide", "yes"]]
+_HIDE = ["effects", ["font", ["size", 1.27, 1.27]], "hide"]
 
 
 def _u(seed: str) -> Q:
@@ -152,7 +152,7 @@ def to_kicad_sch(circuit: Circuit, title: str | None = None, use_kicad_symbols: 
     for gname, refs in groups.items():
         refs.sort(key=order)
         texts.append(["text", Q(f"Block: {gname}"), ["at", 15.0, y_cursor, 0],
-                      ["effects", ["font", ["size", 3, 3], ["bold", "yes"]], ["justify", "left", "bottom"]], ["uuid", _u("blk:" + gname)]])
+                      ["effects", ["font", ["size", 3, 3], "bold"], ["justify", "left", "bottom"]], ["uuid", _u("blk:" + gname)]])
         y_cursor += 8
         x, row_h = 15.0, 0.0
         for ref in refs:
@@ -178,7 +178,7 @@ def to_kicad_sch(circuit: Circuit, title: str | None = None, use_kicad_symbols: 
         rx, ry = _prop_at(node, "Reference")
         vx, vy = _prop_at(node, "Value")
         sym: list = ["symbol", ["lib_id", Q(lid)], ["at", ox, oy, 0], ["unit", 1], ["in_bom", "yes" if comp.part.category not in ("mounting",) else "no"],
-                     ["on_board", "yes"], ["dnp", "yes" if comp.dnp else "no"], ["fields_autoplaced", "yes"], ["uuid", _u("sym:" + ref)],
+                     ["on_board", "yes"], ["dnp", "yes" if comp.dnp else "no"], ["fields_autoplaced"], ["uuid", _u("sym:" + ref)],
                      ["property", Q("Reference"), Q(ref), ["at", round(ox + rx, 4), round(oy - ry, 4), 0], _FONT],
                      ["property", Q("Value"), Q(comp.value or comp.part.mpn), ["at", round(ox + vx, 4), round(oy - vy, 4), 0], _FONT],
                      ["property", Q("Footprint"), Q(_fp_id(comp)), ["at", ox, oy, 0], _HIDE],
@@ -196,10 +196,10 @@ def to_kicad_sch(circuit: Circuit, title: str | None = None, use_kicad_symbols: 
                 continue
             rot = int((p["angle"] + 180) % 360)
             just = ["justify", "left"] if rot in (0, 90) else ["justify", "right"]
-            out.append(["global_label", Q(net), ["shape", "passive"], ["at", px, py, rot], ["fields_autoplaced", "yes"],
+            out.append(["global_label", Q(net), ["shape", "passive"], ["at", px, py, rot], ["fields_autoplaced"],
                         ["effects", ["font", ["size", 1.27, 1.27]], just], ["uuid", _u(f"lbl:{ref}.{p['number']}")],
                         ["property", Q("Intersheetrefs"), Q("${INTERSHEET_REFS}"), ["at", px, py, 0],
-                         ["effects", ["font", ["size", 1.27, 1.27]], ["hide", "yes"]]]])
+                         ["effects", ["font", ["size", 1.27, 1.27]], "hide"]]])
     out += texts
     out.append(["sheet_instances", ["path", Q("/"), ["page", Q("1")]]])
     res = SchResult(dump(out) + "\n")
