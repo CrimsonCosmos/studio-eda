@@ -33,27 +33,34 @@ def parse_footprint(text: str) -> Footprint:
             w, hh = float(sz[1]), float(sz[2])
             if int(round(rot)) % 180 == 90:
                 w, hh = hh, w
-            drill = 0.0
+            drill, slot, slot_y = 0.0, 0.0, True
             dr = sexpr.find(item, "drill")
             if dr:
-                vals = [t for t in dr[1:] if t != "oval"]
                 nums = []
-                for t in vals:
+                for t in dr[1:]:
                     try:
                         nums.append(float(t))
                     except (TypeError, ValueError):
                         pass
-                drill = max(nums) if nums else 0.0
+                if "oval" in dr and len(nums) >= 2 and abs(nums[0] - nums[1]) > 1e-6:
+                    drill, slot = min(nums[:2]), abs(nums[0] - nums[1])
+                    slot_y = nums[1] > nums[0]
+                    if int(round(rot)) % 180 == 90:
+                        slot_y = not slot_y
+                else:
+                    drill = max(nums) if nums else 0.0
             layers = sexpr.find(item, "layers")
             lnames = [str(t) for t in layers[1:]] if layers else []
             smd = ptype == "smd"
+            if smd and not any(l.endswith(".Cu") or l == "*.Cu" for l in lnames):
+                continue                      # paste-only / mask-only sub-aperture, not copper
             if shape in ("custom", "trapezoid"):
                 shape = "rect"
             if ptype == "np_thru_hole":
                 number = ""
             paste = smd and any("Paste" in l for l in lnames)
             pads.append(Pad(number, x, y, w, hh, shape if shape in ("rect", "circle", "oval", "roundrect") else "rect",
-                            0.0 if smd else drill, ptype != "np_thru_hole", paste))
+                            0.0 if smd else drill, ptype != "np_thru_hole", paste, 0.25, 0.0 if smd else slot, slot_y))
         elif h in ("fp_line", "fp_rect", "fp_circle", "fp_poly", "fp_arc"):
             layer = sexpr.find(item, "layer")
             ln = str(layer[1]) if layer else ""

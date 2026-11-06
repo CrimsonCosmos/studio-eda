@@ -27,6 +27,14 @@ request ──► supervisor LLM (Claude Code) ──► SystemPlan (boards, pur
                                                       optional agent cart-fill (stops before payment)
 ```
 
+## Architecture decision: integrate KiCad, don't re-implement it
+Our value is the **LLM supervisor, interface resolver, circuit generators ("blocks"), parts research and purchasing**. Commodity EDA
+(libraries, DRC, Gerber/drill/position export, schematic/PCB file formats, autorouting) is *bought*, not built:
+KiCad 7 (via `kicad-cli`, the `pcbnew` Python module and its file formats; libraries read from `/usr/share/kicad`) and Freerouting.
+We do not fork KiCad: its public interfaces are enough, and a fork would carry a GPL C++ code base for no gain.
+The earlier hand-written exporters, footprint generators and router remain only as offline fallbacks and are being retired as the
+KiCad-backed paths land (see `git log`). Our own placer (thermal/EMI/decoupling-aware) stays because KiCad has none.
+
 ## Quick start
 
 ```bash

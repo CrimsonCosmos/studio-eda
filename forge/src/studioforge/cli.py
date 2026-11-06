@@ -118,6 +118,15 @@ def cmd_buy(a):
         print(f"\n(cart-fill only. To authorize checkout: --checkout --confirm \"{CONFIRM}\")")
 
 
+def cmd_footprints(a):
+    from .footprint_sync import apply_official, verify_all
+    rows = verify_all()
+    for r in rows:
+        print(f"{r['name']:<12} {r['status']:<20} {'; '.join(r['diffs'])[:150]}")
+    print(f"\n{sum(r['status'] == 'match' for r in rows)}/{len(rows)} generator footprints match the official KiCad library; "
+          f"official geometry is cached and used automatically by builds ({apply_official()} cached).")
+
+
 def cmd_mcp(a):
     from .mcp_server import serve
     serve()
@@ -151,6 +160,7 @@ def main(argv=None):
     s = sub.add_parser("buy", help="agent cart-fill from a built system's purchase plan")
     s.add_argument("--out", default="forge_out/system"); s.add_argument("--supplier"); s.add_argument("--checkout", action="store_true"); s.add_argument("--confirm", default="")
     s.set_defaults(fn=cmd_buy)
+    s = sub.add_parser("footprints", help="compare/sync generator footprints with KiCad's official library"); s.set_defaults(fn=cmd_footprints)
     s = sub.add_parser("mcp"); s.set_defaults(fn=cmd_mcp)
     s = sub.add_parser("doctor"); s.set_defaults(fn=cmd_doctor)
     a = ap.parse_args(argv)

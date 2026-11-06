@@ -243,6 +243,15 @@ def resolve_footprint(spec) -> Footprint:
     if name in _REGISTRY:
         return _REGISTRY[name]
     fp = _make(name)
+    # prefer the official KiCad geometry whenever it is already cached (pad numbers must still cover our pins)
+    try:
+        from .footprint_sync import cache_dir, official, kicad_path
+        if kicad_path(name) and (cache_dir() / (re.sub(r"[^A-Za-z0-9._+-]", "_", name) + ".kicad_mod")).exists():
+            off = official(name)
+            if off is not None and fp.pad_numbers() <= off.pad_numbers() | {""}:
+                fp = off
+    except Exception:
+        pass
     _REGISTRY[name] = fp
     return fp
 
@@ -307,7 +316,7 @@ def validate_footprint(fp: Footprint, pin_numbers: set[str] | None = None) -> li
     for i, (a, ba) in enumerate(boxes):
         if a.w <= 0 or a.h <= 0:
             probs.append(f"pad {a.number} has non-positive size")
-        if a.thru and a.drill >= min(a.w, a.h):
+        if a.thru and a.drill >= min(a.w, a.h) and not a.slot:
             probs.append(f"pad {a.number}: drill {a.drill} >= pad size (no annular ring)")
         for b, bb in boxes[i + 1:]:
             if a.number != b.number and ba.intersection(bb).area > 1e-6:

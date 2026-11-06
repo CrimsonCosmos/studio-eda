@@ -44,11 +44,15 @@ def render_report(res: BuildResult, project: str, extra: dict) -> str:
         up = f"{r['unit_price']:.3f}" if r["unit_price"] is not None else "?"
         L.append(f"| {r['qty']} | {','.join(r['refs'][:6])}{'...' if len(r['refs']) > 6 else ''} | {r['mpn']} | {r['value']} | {r['package']} | {up} | {'yes' if r['verified'] else 'no'} |")
     unv = [r["mpn"] for r in rows if not r["verified"] and r["provenance"] != "generic"]
+    fsrc = c.calcs.get("footprint_sources", {})
+    gen_only = sorted(n for n, src in fsrc.items() if src.startswith("generator"))
+    official = sorted(n for n, src in fsrc.items() if src.startswith(("kicad:", "datasheet:")))
     L += ["", "## Manufacturing-readiness checklist", "",
           "The software verifies geometry (DRC), connectivity and format validity. It cannot replace these human checks:", ""]
     L += [f"- [{'x' if drc.clean else ' '}] DRC clean and every net connected (automated)",
           f"- [{' ' if unv else 'x'}] Pinouts cross-checked against datasheets" + (f" - **unverified: {', '.join(unv)}**" if unv else ""),
-          "- [ ] Footprint land patterns compared to the manufacturer drawings (generated patterns are IPC-nominal; connectors/modules especially)",
+          f"- [{' ' if gen_only else 'x'}] Footprints: {len(official)} use official geometry (KiCad library / datasheet drawing), "
+          + (f"**{len(gen_only)} are generator-only and still need a check against the manufacturer drawing: {', '.join(gen_only)}**" if gen_only else "none are generator-only"),
           "- [ ] Schematic reviewed by an engineer (block calculations are listed above; stability/EMC are not simulated)",
           "- [ ] High-current nets reviewed (ampacity warnings above); thermal estimate is a 2-D model, not a substitute for testing",
           "- [ ] Gerbers opened in an independent viewer (KiCad/Gerbv) and the fab's online DFM check passed",

@@ -52,6 +52,11 @@ def suggest_layers(circuit: Circuit) -> int:
 def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> BuildResult:
     spec = spec or BoardSpec()
     t_start = time.time()
+    try:                                    # adopt official footprint geometry where KiCad's library has it (cached, one fetch each)
+        from ..footprint_sync import sync_circuit
+        sync_circuit(circuit)
+    except Exception:
+        pass
     msgs: list[str] = []
 
     def say(s: str) -> None:

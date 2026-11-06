@@ -32,6 +32,8 @@ class PlacedPad:
     drill: float
     plated: bool
     paste: bool
+    slot: float = 0.0
+    slot_y: bool = True
 
     @property
     def thru(self) -> bool:
@@ -119,7 +121,8 @@ class Board:
             for p in comp.footprint.pads:
                 x, y, w, h = oriented_pad(p, pl.rot)
                 net = pn.get(f"{ref}.{p.number}") if p.number else None
-                out.append(PlacedPad(ref, p.number, net, pl.x + x, pl.y + y, w, h, p.shape, p.drill, p.plated, p.paste))
+                sy = p.slot_y if int(round(pl.rot)) % 180 == 0 else (not p.slot_y)
+                out.append(PlacedPad(ref, p.number, net, pl.x + x, pl.y + y, w, h, p.shape, p.drill, p.plated, p.paste, p.slot, sy))
         return out
 
     def pads_of(self, ref: str) -> list[PlacedPad]:

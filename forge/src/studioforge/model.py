@@ -48,6 +48,8 @@ class Pad:
     plated: bool = True
     paste: bool = True
     rratio: float = 0.25
+    slot: float = 0.0            # extra drill length (mm) for an oval/slotted hole; 0 = round
+    slot_y: bool = True          # slot runs along y (else x) before footprint rotation
 
     @property
     def thru(self) -> bool:

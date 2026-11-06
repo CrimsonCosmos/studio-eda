@@ -247,30 +247,40 @@ def outline_layer(board: Board) -> str:
 def excellon(board: Board, plated: bool) -> str:
     H = board.height
     holes: dict[float, list[tuple[float, float]]] = {}
+    slots: dict[float, list[tuple[float, float, float, float]]] = {}
     for p in board.pads():
         if p.drill > 0 and p.plated == plated:
-            holes.setdefault(round(p.drill, 3), []).append((p.x, H - p.y))
+            if p.slot > 0:                                   # routed slot (G85): centre-line endpoints, tool = slot width
+                h = p.slot / 2
+                if p.slot_y:
+                    slots.setdefault(round(p.drill, 3), []).append((p.x, H - p.y - h, p.x, H - p.y + h))
+                else:
+                    slots.setdefault(round(p.drill, 3), []).append((p.x - h, H - p.y, p.x + h, H - p.y))
+            else:
+                holes.setdefault(round(p.drill, 3), []).append((p.x, H - p.y))
     if plated:
         for v in board.vias:
             holes.setdefault(round(v.drill, 3), []).append((v.x, H - v.y))
-    if not holes:
+    if not holes and not slots:
         return ""
     func = "Plated,1,%d,PTH" % board.rules.layers if plated else "NonPlated,1,%d,NPTH" % board.rules.layers
     out = ["M48", "; DRILL file {studioforge} date unspecified", "; FORMAT={-:-/ absolute / metric / decimal}",
            f"; #@! TF.FileFunction,{func}", "FMAT,2", "METRIC,TZ"]
-    order = sorted(holes)
+    order = sorted(set(holes) | set(slots))
     for i, d in enumerate(order, 1):
         out.append(f"T{i}C{d:.3f}")
     out += ["G90", "%", "G05"]
     for i, d in enumerate(order, 1):
         out.append(f"T{i}")
         seen = set()
-        for (x, y) in holes[d]:
+        for (x, y) in holes.get(d, []):
             key = (round(x, 3), round(y, 3))
             if key in seen:
                 continue
             seen.add(key)
             out.append(f"X{x:.3f}Y{y:.3f}")
+        for (x1, y1, x2, y2) in slots.get(d, []):
+            out.append(f"X{x1:.3f}Y{y1:.3f}G85X{x2:.3f}Y{y2:.3f}")
     out += ["T0", "M30"]
     return "\n".join(out) + "\n"
 

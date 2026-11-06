@@ -101,3 +101,38 @@ def test_part_roundtrip(lib):
     p = lib.get("IR2104SPBF")
     q = PartDef.from_dict(json.loads(json.dumps(p.to_dict())))
     assert q.mpn == p.mpn and [x.number for x in q.pins] == [x.number for x in p.pins]
+
+
+def test_official_footprint_overrides_generator_and_is_reported(lib, tmp_path, monkeypatch):
+    """Official KiCad geometry (here a stub .kicad_mod served from a fake cache) replaces the generator and is recorded as the source."""
+    from studioforge import footprint_sync as fs, footprints as fpm
+    from studioforge.model import Circuit
+    xt = """(footprint "XT" (layer "F.Cu")
+      (pad "1" thru_hole circle (at 0 0) (size 4.1 4.1) (drill 2.7) (layers "*.Cu" "*.Mask"))
+      (pad "2" thru_hole circle (at 7.2 0) (size 4.1 4.1) (drill 2.7) (layers "*.Cu" "*.Mask"))
+      (pad "" np_thru_hole circle (at -3.15 -6) (size 1.7 1.7) (drill 1.7) (layers "*.Cu" "*.Mask")))"""
+    monkeypatch.setattr(fs, "fetch", lambda name, home=None, timeout=20: (tmp_path / "x.kicad_mod") if name == "XT60PW" else None)
+    (tmp_path / "x.kicad_mod").write_text(xt)
+    fpm._REGISTRY.pop("XT60PW", None)
+    c = Circuit("t")
+    j = c.add(lib.get("XT60PW-M"), prefix="J")
+    assert max(p.drill for p in j.footprint.pads) == 2.0                  # generator value (known to be wrong)
+    info = fs.sync_circuit(c)
+    assert info["XT60PW"].startswith("kicad:")
+    assert max(p.drill for p in c.components["J1"].footprint.pads) == 2.7  # official value adopted
+    fpm._REGISTRY.pop("XT60PW", None)
+
+
+def test_compare_flags_drill_differences():
+    from studioforge import footprint_sync as fs
+    a, b = resolve_footprint("XT60PW"), resolve_footprint("XT60PW")
+    assert fs.compare(a, b) == []
+    from dataclasses import replace
+    b2 = type(b)(b.name, [replace(p, drill=2.7) for p in b.pads], b.courtyard)
+    assert any("drill" in d for d in fs.compare(a, b2))
+
+
+def test_kicad_parser_drops_paste_only_pads():
+    from studioforge.kicad_mod import parse_footprint
+    fp = parse_footprint('(footprint "X" (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")) (pad "" smd rect (at 0 0) (size 0.5 0.5) (layers "F.Paste")))')
+    assert len(fp.pads) == 1
