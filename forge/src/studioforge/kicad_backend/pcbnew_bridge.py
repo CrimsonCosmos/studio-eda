@@ -1,10 +1,11 @@
 """pcbnew helper, run with the SYSTEM python (the one that can `import pcbnew`), never imported by studioforge.
 
     /usr/bin/python3 pcbnew_bridge.py dsn spec.json     # .kicad_pcb -> Specctra DSN
-    /usr/bin/python3 pcbnew_bridge.py ses spec.json     # .kicad_pcb + Freerouting .ses -> routed .kicad_pcb + result json
+(KiCad 7's python API cannot import a .ses outside the GUI - ImportSpecctraSES works on the GUI board only - so the
+ Freerouting result is parsed by studioforge.pcb.freerouting.parse_ses instead.)
 
 spec.json keys (all lengths in mm):
-  pcb, dsn, ses, out_pcb, result      file paths
+  pcb, dsn                            file paths
   rules   {track, clearance, via_dia, via_drill}              default net class
   classes [{name, track, nets:[...]}]                         wider-track net classes (same clearance/via as default)
   planes  {layer: net}                                        full-layer copper planes (layer becomes a power layer)
@@ -47,9 +48,10 @@ def _prepare(board, spec):
         nc.SetViaDiameter(MM(r["via_dia"]))
         nc.SetViaDrill(MM(r["via_drill"]))
         for n in c["nets"]:
-            nc.Add(n)
+            ni = board.FindNet(n)
+            if ni is not None:
+                ni.SetNetClass(nc)
         ns.m_NetClasses[c["name"]] = nc
-    board.SynchronizeNetsAndNetClasses(False) if hasattr(board, "SynchronizeNetsAndNetClasses") else None
     for layer, net in spec.get("planes", {}).items():
         lid = _layer(board, layer)
         board.SetLayerType(lid, pcbnew.LT_POWER)
@@ -74,28 +76,6 @@ def cmd_dsn(spec):
     board.Save(spec["pcb"] + ".prepared")
 
 
-def cmd_ses(spec):
-    board = pcbnew.LoadBoard(spec["pcb"])
-    _prepare(board, spec)
-    if not pcbnew.ImportSpecctraSES(board, spec["ses"]):
-        raise SystemExit("ImportSpecctraSES failed")
-    board.Save(spec["out_pcb"])
-    tracks, vias = [], []
-    for t in board.GetTracks():
-        cls = t.GetClass()
-        if cls == "PCB_VIA":
-            v = pcbnew.Cast_to_PCB_VIA(t)
-            p = v.GetPosition()
-            vias.append({"x": pcbnew.ToMM(p.x), "y": pcbnew.ToMM(p.y), "net": v.GetNetname(),
-                         "dia": pcbnew.ToMM(v.GetWidth()), "drill": pcbnew.ToMM(v.GetDrillValue())})
-        elif cls == "PCB_TRACK":
-            a, b = t.GetStart(), t.GetEnd()
-            tracks.append({"layer": board.GetLayerName(t.GetLayer()), "net": t.GetNetname(),
-                           "x1": pcbnew.ToMM(a.x), "y1": pcbnew.ToMM(a.y), "x2": pcbnew.ToMM(b.x), "y2": pcbnew.ToMM(b.y),
-                           "width": pcbnew.ToMM(t.GetWidth())})
-    json.dump({"tracks": tracks, "vias": vias}, open(spec["result"], "w"))
-
-
 if __name__ == "__main__":
     spec = json.load(open(sys.argv[2]))
-    {"dsn": cmd_dsn, "ses": cmd_ses}[sys.argv[1]](spec)
+    {"dsn": cmd_dsn}[sys.argv[1]](spec)

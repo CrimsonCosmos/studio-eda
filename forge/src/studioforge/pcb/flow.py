@@ -28,6 +28,7 @@ class BoardSpec:
     utilizations: tuple = (0.42, 0.32, 0.24)
     time_budget_s: float = 900.0
     rule_overrides: dict = field(default_factory=dict)
+    router: str = "auto"                   # builtin | freerouting | auto (freerouting if java + jar + KiCad available)
 
 
 @dataclass
@@ -47,6 +48,21 @@ def suggest_layers(circuit: Circuit) -> int:
     if hot or high_i or n > 45 or fine:
         return 4
     return 2
+
+
+def _route_freerouting(board: Board, spec: BoardSpec, say) -> bool:
+    """True if Freerouting routed the board (selected by spec.router); False = use the builtin router."""
+    if spec.router == "builtin":
+        return False
+    from . import freerouting as fr
+    if spec.router == "auto" and not fr.available():
+        return False
+    try:
+        fr.route_with_freerouting(board, fr.FreeroutingOptions(timeout_s=max(60.0, spec.time_budget_s * 0.5)))
+        return True
+    except fr.FreeroutingError as e:
+        say(f"freerouting failed ({e}); falling back to the builtin router")
+        return False
 
 
 def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> BuildResult:
@@ -83,7 +99,8 @@ def build_board(circuit: Circuit, spec: BoardSpec | None = None, log=print) -> B
             pours = plan_power_pours(board)
             say(f"{layers}L util={util}{'' if pwr_plane else ' (2nd inner layer = signal)'}: board {board.width}x{board.height} mm; "
                 f"pours {pours or 'none'}; routing")
-            route(board, RouteOptions(pitch=spec.pitch))
+            if not _route_freerouting(board, spec, say):
+                route(board, RouteOptions(pitch=spec.pitch))
             fill_zones(board)
             if add_stitching(board):
                 fill_zones(board)
