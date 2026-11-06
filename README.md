@@ -31,11 +31,3 @@ wasm-pack build --target web --release --out-dir ../pkg
 cargo test -p studio-core -p studio-renderer   # native
 cargo test --target wasm32-unknown-unknown     # full workspace
 ```
-
-
-## `forge/` — studioforge: LLM-supervised, deterministic PCB/system design
-
-A Python package that pairs Claude Code with deterministic EDA pipelines: *"build me a humanoid robot, budget $50,000"* →
-recursive decomposition (with a buy-vs-build policy) → interface resolver → parametric circuit blocks → placement/autorouting/DRC →
-Gerber/drill/BOM/CPL/KiCad files → purchasing lists. See [`forge/README.md`](forge/README.md).
-It is independent of the Rust crates above (they could later supply the MNA solver for simulation-in-the-loop checks).
